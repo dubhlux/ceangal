@@ -63,36 +63,11 @@
   </div>
   <script type="module">
     import { init } from "./ceangal_runtime.js";
-
-    // Draw a simple gradient background on canvas (placeholder for snaidhm)
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 512, 512);
-    grad.addColorStop(0, "#1a1a2e");
-    grad.addColorStop(1, "#16213e");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 512, 512);
-
-    // White card area
-    ctx.fillStyle = "#fff";
-    ctx.beginPath();
-    ctx.roundRect(26, 26, 460, 460, 20);
-    ctx.fill();
-
-    // Header bar
-    const hgrad = ctx.createLinearGradient(38, 38, 38, 115);
-    hgrad.addColorStop(0, "#1e3a6e");
-    hgrad.addColorStop(1, "#4878c8");
-    ctx.fillStyle = hgrad;
-    ctx.beginPath();
-    ctx.roundRect(38, 38, 436, 77, 10);
-    ctx.fill();
-
     init(
       "./ceangal.wasm?v=" + Date.now(),
+      document.getElementById("canvas"),
       document.getElementById("text-overlay"),
       document.getElementById("ime-input"),
-      512, 512,
     ).catch(e => { document.body.textContent = e.message; console.error(e); });
   </script>
 </body>
