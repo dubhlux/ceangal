@@ -10,7 +10,7 @@
       width: min(calc(100vw - 32px), calc(100vh - 32px));
       height: min(calc(100vw - 32px), calc(100vh - 32px));
     }
-    canvas { width: 100%; height: 100%; display: block; }
+    canvas { width: 100%; height: 100%; display: block; cursor: default; }
     .text-overlay {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       pointer-events: none;
@@ -68,6 +68,10 @@
   </div>
   <script type="module">
     import { init } from "./ceangal_runtime.js";
+    // Clear text selection when clicking outside text elements
+    document.getElementById("canvas").addEventListener("mousedown", () => {
+      window.getSelection()?.removeAllRanges();
+    });
     init(
       "./ceangal.wasm?v=" + Date.now(),
       document.getElementById("canvas"),

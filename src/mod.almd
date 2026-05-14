@@ -6,6 +6,7 @@
 import self.dom as dom
 import self.layout as layout
 import snaidhm
+import snaidhm.ttf as ttf
 
 // ── String helper ──
 
@@ -125,46 +126,74 @@ fn cache_style_ids() -> List[Int] = [
 //  8        icon2
 //  9        icon3
 
-fn build_demo_layout(vw: Float, vh: Float) -> List[layout.LayoutRect] = {
-  // Yoga sample: phone frame centered in viewport
-  let phone_w = vh * 0.4    // phone is 40% of viewport height wide
-  let phone_h = vh * 0.76   // phone is 76% of viewport height tall
+fn build_demo_layout(font: ttf.Font, vw: Float, vh: Float) -> { rects: List[layout.LayoutRect], texts: List[TextEntry] } = {
+  let phone_w = vh * 0.4
+  let phone_h = vh * 0.76
+
+  // Text nodes with measured sizes
+  let title_node = text_leaf(font, "ceangal", 24.0, vh)
+  let sub_node = text_leaf(font, "Yoga Layout Demo", 11.0, vh)
+  let lbl1_node = text_leaf(font, "flex: 1", 12.0, vh)
+  let lbl2_node = text_leaf(font, "flex: 2", 12.0, vh)
+
+  let header = layout.col([title_node, sub_node])
+    |> layout.with_padding(layout.edges_xy(8.0, 6.0))
+    |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(layout.JUSTIFY_CENTER)
+    |> layout.with_gap(2.0) |> layout.with_size(AUTO, 60.0)
+
+  let mid1 = layout.col([lbl1_node])
+    |> layout.with_grow(1.0) |> layout.with_margin(layout.edges_xy(10.0, 0.0))
+    |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(layout.JUSTIFY_CENTER)
+
+  let mid2 = layout.col([lbl2_node])
+    |> layout.with_grow(2.0) |> layout.with_margin(layout.edges_xy(10.0, 0.0))
+    |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(layout.JUSTIFY_CENTER)
 
   let bottom_bar = layout.row([
     layout.leaf(40.0, 40.0), layout.leaf(40.0, 40.0),
     layout.leaf(40.0, 40.0), layout.leaf(40.0, 40.0),
-  ]) |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(5)  // JUSTIFY_AROUND
+  ]) |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_justify(5)
      |> layout.with_position(layout.POSITION_ABSOLUTE, AUTO, AUTO, 0.0, AUTO)
      |> layout.with_width_pct(100.0) |> layout.with_size(AUTO, 64.0)
 
-  let content = layout.col([
-    layout.leaf(AUTO, 60.0),                                                     // header
-    layout.node_defaults() |> layout.with_grow(1.0) |> layout.with_margin(layout.edges_xy(10.0, 0.0)),  // middle1
-    layout.node_defaults() |> layout.with_grow(2.0) |> layout.with_margin(layout.edges_xy(10.0, 0.0)),  // middle2
-    bottom_bar,
-  ]) |> layout.with_grow(1.0) |> layout.with_gap(10.0)
+  let content = layout.col([header, mid1, mid2, bottom_bar])
+    |> layout.with_grow(1.0) |> layout.with_gap(10.0)
 
-  let phone = layout.col([content]) |> layout.with_size(phone_w, phone_h) |> layout.with_padding(layout.edges_all(10.0))
+  let phone = layout.col([content])
+    |> layout.with_size(phone_w, phone_h) |> layout.with_padding(layout.edges_all(10.0))
 
-  // Center phone in viewport
   let root = layout.row([phone])
     |> layout.with_justify(layout.JUSTIFY_CENTER) |> layout.with_align(layout.ALIGN_CENTER)
     |> layout.with_size(vw, vh)
-  layout.layout(root, vw, vh)
-}
 
-// Tree indices (with centering wrapper):
-//  0  root (viewport)
-//  1    phone frame
-//  2      content col
-//  3        header
-//  4        middle1
-//  5        middle2
-//  6        bottom_bar (ABSOLUTE)
-//  7          icon0
-//  8          icon1
-//  9          icon2
-// 10          icon3
+  let rects = layout.layout(root, vw, vh)
+
+  // Tree indices:
+  //  0  root
+  //  1    phone
+  //  2      content
+  //  3        header
+  //  4          title_text
+  //  5          sub_text
+  //  6        mid1
+  //  7          lbl1_text
+  //  8        mid2
+  //  9          lbl2_text
+  // 10        bottom_bar (abs)
+  // 11-14      icons
+
+  let white = [1.0, 1.0, 1.0, 1.0]
+  let light = [0.9, 0.9, 0.9, 1.0]
+  let dark = [0.4, 0.4, 0.4, 1.0]
+  let texts = [
+    { rect_idx: 4, chars: snaidhm.str("ceangal"), font_size: 24.0, color: dark, align: 1 },
+    { rect_idx: 5, chars: snaidhm.str("Yoga Layout Demo"), font_size: 11.0, color: dark, align: 1 },
+    { rect_idx: 7, chars: snaidhm.str("flex: 1"), font_size: 12.0, color: dark, align: 1 },
+    { rect_idx: 9, chars: snaidhm.str("flex: 2"), font_size: 12.0, color: dark, align: 1 },
+  ]
+
+  { rects: rects, texts: texts }
+}
 
 // ── Text items positioned from layout rects ──
 
@@ -181,34 +210,30 @@ fn overlay_items(rects: List[layout.LayoutRect]) -> List[OverlayItem] = {
 fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = {
   let w = int.to_float(canvas_w)
   let h = int.to_float(canvas_h)
-  let rects = build_demo_layout(w, h)
-  let items = overlay_items(rects)
-
+  let font = ttf.parse_font()
+  let demo = build_demo_layout(font, w, h)
+  let rects = demo.rects
   let st = cache_style_ids()
 
-  for item in items {
-    let el = dom.create_element(s(item.tag))
-    if item.tag == "h1" or item.tag == "h2" or item.tag == "h3" then {
-      dom.set_style(el, st[7], st[8])        // margin: 0
-      dom.set_style(el, st[9], st[10])       // fontWeight: normal
-    } else ()
-
-    dom.set_text(el, s(item.text_str))
+  for entry in demo.texts {
+    let rect = rects[entry.rect_idx]
+    let el = dom.create_element(s("span"))
+    // Convert chars back to string for DOM
+    dom.set_text(el, s(string.from_bytes(entry.chars)))
     dom.set_style(el, st[0], st[1])         // position: absolute
-    dom.set_style(el, st[4], float_to_px(item.size))
+    dom.set_style(el, st[4], float_to_px(entry.font_size))
     dom.set_style(el, st[5], st[6])         // fontFamily: sans-serif
 
     dom.append_child(overlay, el)
 
     let el_w = dom.get_offset_width(el)
-    let left_px = if item.align == ALIGN_CENTER then
-      item.px_x - el_w / 2.0
+    let left_px = if entry.align == 1 then
+      rect.x + rect.w / 2.0 - el_w / 2.0
     else
-      item.px_x
+      rect.x
 
     dom.set_style(el, st[2], float_to_px(left_px))
-    // Offset down + taller hit area to cover GPU-rendered text
-    dom.set_style(el, st[3], float_to_px(item.px_y + item.size * 0.2))
+    dom.set_style(el, st[3], float_to_px(rect.y + entry.font_size * 0.2))
   }
 }
 
@@ -224,6 +249,42 @@ fn textarea_w(vw: Int, vh: Int) -> Float = 0.0
 
 // Local constant (cross-module let workaround)
 let AUTO = -1.0
+
+// ── Text-aware layout nodes ──
+// TextEntry: links a layout node index to text content for rendering
+
+type TextEntry = { rect_idx: Int, chars: List[Int], font_size: Float, color: List[Float], align: Int }
+
+// Measure text width using TTF parser, create a leaf node with measured size
+fn text_leaf(font: ttf.Font, text: String, font_size: Float, viewport_h: Float) -> layout.Node = {
+  let chars = string.to_bytes(text)
+  let upm = int.to_float(font.units_per_em)
+  let scale = font_size * 2.0 / viewport_h / upm
+  let measured_w = list.fold(chars, 0.0, (acc, ch) =>
+    acc + int.to_float(ttf.get_advance_width(font, ttf.char_to_glyph_id(font, ch))) * scale
+  )
+  // Width is in NDC, convert back to pixels
+  let w_px = measured_w * viewport_h / 2.0
+  let h_px = font_size * 1.2
+  layout.leaf(w_px, h_px)
+}
+
+// Generate GPU text cubics from layout rects + text entries
+fn render_texts(entries: List[TextEntry], rects: List[layout.LayoutRect],
+                vw: Float, vh: Float) -> { cubics: List[snaidhm.Cubic], paints: List[snaidhm.Paint] } = {
+  var specs: List[snaidhm.TextSpec] = []
+  for entry in entries {
+    let rect = rects[entry.rect_idx]
+    // Text positioned at center-x, baseline-y of the rect
+    let ndc_x = if entry.align == 1 then
+      px_to_ndc_x(rect.x + rect.w / 2.0, vw)  // center
+    else
+      px_to_ndc_x(rect.x, vw)  // left
+    let ndc_y = px_to_ndc_y(rect.y + rect.h * 0.75, vh)  // baseline approx
+    specs = specs + [snaidhm.text_spec(entry.chars, entry.font_size, ndc_x, ndc_y, entry.align, entry.color)]
+  }
+  snaidhm.build_text_cubics(specs, vh)
+}
 
 // ── Layout → NDC conversion ──
 // Layout engine works in pixels (0,0 = top-left). snaidhm uses NDC (-1..1).
@@ -241,8 +302,9 @@ fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_
   let vw = int.to_float(css_w)
   let vh = int.to_float(css_h)
 
-  let rects = build_demo_layout(vw, vh)
-  // Tree: 0=root, 1=phone, 2=content, 3=header, 4=mid1, 5=mid2, 6=bar, 7-10=icons
+  let font = ttf.parse_font()
+  let demo = build_demo_layout(font, vw, vh)
+  let rects = demo.rects
 
   var cubics: List[snaidhm.Cubic] = []
   var paints: List[snaidhm.Paint] = []
@@ -251,18 +313,19 @@ fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_
   var pid = 0
   let cr = px_to_ndc_w(6.0, vw)
 
+  // Shapes: phone frame + panels + icons (new indices with text nodes in tree)
   let shape_colors = [
-    [1.0, 1.0, 1.0, 1.0],         // phone frame (white)
-    [0.82, 0.82, 0.82, 1.0],      // header
-    [0.82, 0.82, 0.82, 1.0],      // middle1
-    [0.82, 0.82, 0.82, 1.0],      // middle2
+    [1.0, 1.0, 1.0, 1.0],         // phone frame
+    [0.82, 0.82, 0.82, 1.0],      // header (container)
+    [0.82, 0.82, 0.82, 1.0],      // middle1 (container)
+    [0.82, 0.82, 0.82, 1.0],      // middle2 (container)
     [0.90, 0.90, 0.90, 1.0],      // bottom bar
     [0.62, 0.62, 0.62, 1.0],      // icon0
     [0.62, 0.62, 0.62, 1.0],      // icon1
     [0.62, 0.62, 0.62, 1.0],      // icon2
     [0.62, 0.62, 0.62, 1.0],      // icon3
   ]
-  let render_indices = [1, 3, 4, 5, 6, 7, 8, 9, 10]
+  let render_indices = [1, 3, 6, 8, 10, 11, 12, 13, 14]
 
   for si in 0..list.len(render_indices) {
     let ri = render_indices[si]
@@ -277,9 +340,8 @@ fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_
   }
   let num_shape_paints = pid
 
-  // No text for Yoga sample demo
-  let text = snaidhm.build_text_cubics([], vh)
-  // Remap text path_ids
+  // Text from layout
+  let text = render_texts(demo.texts, rects, vw, vh)
   var text_cubics: List[snaidhm.Cubic] = []
   for cub in text.cubics {
     text_cubics = text_cubics + [{

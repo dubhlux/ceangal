@@ -756,3 +756,80 @@ test "yoga: mobile_app_sample" {
   // root(1) + content(1) + header(1) + middle1(1) + middle2(1) + bar(1) + 4 icons = 10
   assert(n_rects >= 8)
 }
+
+// ════════════════════════════════════════
+// Row/Column Reverse
+// ════════════════════════════════════════
+
+test "yoga: row_reverse" {
+  let root = lay.row([lay.leaf(50.0, 50.0), lay.leaf(80.0, 50.0)])
+    |> lay.with_size(200.0, 100.0)
+  // Normal row: child0 at x=0, child1 at x=50
+  let r1 = lay.layout(root, 200.0, 100.0)
+  assert(approx(r1[1].x, 0.0))
+  assert(approx(r1[2].x, 50.0))
+
+  // Reverse: child0 at right, child1 to its left
+  let root_rev = lay.rebuild(root, lay.ROW_REVERSE, root.wrap, root.justify, root.align_items, root.align_content,
+    root.gap_main, root.gap_cross, root.grow, root.shrink, root.basis, root.align_self,
+    root.padding, root.margin, root.border, root.width, root.height,
+    root.min_width, root.min_height, root.max_width, root.max_height,
+    root.display, root.position, root.pos_top, root.pos_right, root.pos_bottom, root.pos_left,
+    root.width_pct, root.height_pct, root.children)
+  let r2 = lay.layout(root_rev, 200.0, 100.0)
+  // child0 (50w) at right: x = 200 - 50 = 150
+  assert(approx(r2[1].x, 150.0))
+  // child1 (80w) next: x = 200 - 50 - 80 = 70
+  assert(approx(r2[2].x, 70.0))
+}
+
+test "yoga: column_reverse" {
+  let c0 = lay.leaf(50.0, 40.0)
+  let c1 = lay.leaf(50.0, 60.0)
+  let root = lay.col([c0, c1]) |> lay.with_size(100.0, 200.0)
+  let r1 = lay.layout(root, 100.0, 200.0)
+  assert(approx(r1[1].y, 0.0))
+  assert(approx(r1[2].y, 40.0))
+
+  let root_rev = lay.rebuild(root, lay.COLUMN_REVERSE, root.wrap, root.justify, root.align_items, root.align_content,
+    root.gap_main, root.gap_cross, root.grow, root.shrink, root.basis, root.align_self,
+    root.padding, root.margin, root.border, root.width, root.height,
+    root.min_width, root.min_height, root.max_width, root.max_height,
+    root.display, root.position, root.pos_top, root.pos_right, root.pos_bottom, root.pos_left,
+    root.width_pct, root.height_pct, root.children)
+  let r2 = lay.layout(root_rev, 100.0, 200.0)
+  // child0 (40h) at bottom: y = 200 - 40 = 160
+  assert(approx(r2[1].y, 160.0))
+  // child1 (60h): y = 200 - 40 - 60 = 100
+  assert(approx(r2[2].y, 100.0))
+}
+
+// ════════════════════════════════════════
+// Auto Margin
+// ════════════════════════════════════════
+
+test "yoga: auto_margin_main_center" {
+  // Single child with margin-left:auto, margin-right:auto → centered
+  let c = lay.leaf(50.0, 50.0) |> lay.with_margin({ top: 0.0, right: lay.MARGIN_AUTO, bottom: 0.0, left: lay.MARGIN_AUTO })
+  let root = lay.row([c]) |> lay.with_size(200.0, 100.0)
+  let r = lay.layout(root, 200.0, 100.0)
+  // free = 150, 2 auto margins → 75 each. child at x=75.
+  assert(approx(r[1].x, 75.0))
+}
+
+test "yoga: auto_margin_main_end" {
+  // margin-left:auto → push to right
+  let c = lay.leaf(50.0, 50.0) |> lay.with_margin({ top: 0.0, right: 0.0, bottom: 0.0, left: lay.MARGIN_AUTO })
+  let root = lay.row([c]) |> lay.with_size(200.0, 100.0)
+  let r = lay.layout(root, 200.0, 100.0)
+  assert(approx(r[1].x, 150.0))
+}
+
+test "yoga: auto_margin_cross_center" {
+  // margin-top:auto, margin-bottom:auto → vertically centered in row
+  let c = lay.leaf(50.0, 30.0) |> lay.with_margin({ top: lay.MARGIN_AUTO, right: 0.0, bottom: lay.MARGIN_AUTO, left: 0.0 })
+  let root = lay.row([c]) |> lay.with_size(200.0, 100.0)
+  let r = lay.layout(root, 200.0, 100.0)
+  // cross free = 100 - 30 = 70. Auto both → 35 each. y = 35.
+  assert(approx(r[1].y, 35.0))
+}
