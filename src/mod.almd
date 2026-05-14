@@ -388,5 +388,5 @@ fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_
   }
 
   snaidhm.render_scene(device, phys_w, phys_h, cubics + text_cubics, shadows, paints + text.paints,
-    img_vtx, img_idx, img_count, img_texture, img_sampler)
+    img_vtx, img_idx, img_count, img_texture, img_sampler, 0.0)
 }
