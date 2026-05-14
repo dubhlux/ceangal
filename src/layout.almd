@@ -35,6 +35,9 @@ let WRAP_REVERSE = 2
 let DISPLAY_FLEX = 0
 let DISPLAY_NONE = 1
 
+let POSITION_RELATIVE = 0
+let POSITION_ABSOLUTE = 1
+
 // ── Edge values ──
 
 type Edges = { top: Float, right: Float, bottom: Float, left: Float }
@@ -81,6 +84,13 @@ type Node = {
   max_height: Float,
 
   display: Int,          // DISPLAY_FLEX | DISPLAY_NONE
+  position: Int,         // POSITION_RELATIVE | POSITION_ABSOLUTE
+  pos_top: Float,        // UNDEFINED = not set
+  pos_right: Float,
+  pos_bottom: Float,
+  pos_left: Float,
+  width_pct: Float,      // UNDEFINED = not set, 100.0 = 100%
+  height_pct: Float,
 
   children: List[Node],
 }
@@ -99,7 +109,10 @@ fn node_defaults() -> Node = {
   padding: edges_zero, margin: edges_zero, border: edges_zero,
   width: UNDEFINED, height: UNDEFINED,
   min_width: 0.0, min_height: 0.0, max_width: UNDEFINED, max_height: UNDEFINED,
-  display: DISPLAY_FLEX, children: [],
+  display: DISPLAY_FLEX, position: POSITION_RELATIVE,
+  pos_top: UNDEFINED, pos_right: UNDEFINED, pos_bottom: UNDEFINED, pos_left: UNDEFINED,
+  width_pct: UNDEFINED, height_pct: UNDEFINED,
+  children: [],
 }
 
 // Copy all fields, replacing only what differs — helper macro pattern
@@ -112,7 +125,7 @@ fn copy_node(n: Node) -> Node = {
   width: n.width, height: n.height,
   min_width: n.min_width, min_height: n.min_height,
   max_width: n.max_width, max_height: n.max_height,
-  display: n.display, children: n.children,
+  display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: n.children,
 }
 
 fn row(children: List[Node]) -> Node = {
@@ -122,7 +135,7 @@ fn row(children: List[Node]) -> Node = {
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
     padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
-    display: n.display, children: children }
+    display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
 }
 
 fn col(children: List[Node]) -> Node = {
@@ -132,7 +145,7 @@ fn col(children: List[Node]) -> Node = {
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
     padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
-    display: n.display, children: children }
+    display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
 }
 
 fn leaf(w: Float, h: Float) -> Node = {
@@ -142,126 +155,157 @@ fn leaf(w: Float, h: Float) -> Node = {
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
     padding: n.padding, margin: n.margin, border: n.border, width: w, height: h,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
-    display: n.display, children: [] }
+    display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: [] }
 }
 
 // ── Builders ──
 
-fn set_field(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
-             gm: Float, gc: Float, gr: Float, sh: Float, bas: Float, as_: Int,
-             pad: Edges, mar: Edges, bor: Edges, w: Float, h: Float,
-             mnw: Float, mnh: Float, mxw: Float, mxh: Float,
-             disp: Int, ch: List[Node]) -> Node =
+// Rebuild node with all fields. with_* functions override specific fields.
+fn rebuild(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
+           gm: Float, gc: Float, gr: Float, sh: Float, bas: Float, as_: Int,
+           pad: Edges, mar: Edges, bor: Edges, w: Float, h: Float,
+           mnw: Float, mnh: Float, mxw: Float, mxh: Float,
+           disp: Int, pos: Int, pt: Float, pr: Float, pb: Float, pl: Float,
+           wpct: Float, hpct: Float, ch: List[Node]) -> Node =
   { direction: dir, wrap: wrap, justify: just, align_items: ai, align_content: ac,
     gap_main: gm, gap_cross: gc, grow: gr, shrink: sh, basis: bas, align_self: as_,
     padding: pad, margin: mar, border: bor, width: w, height: h,
     min_width: mnw, min_height: mnh, max_width: mxw, max_height: mxh,
-    display: disp, children: ch }
+    display: disp, position: pos, pos_top: pt, pos_right: pr, pos_bottom: pb, pos_left: pl,
+    width_pct: wpct, height_pct: hpct, children: ch }
+
+// Shorthand: copy all new fields from n
+fn sf(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
+      gm: Float, gc: Float, gr: Float, sh: Float, bas: Float, as_: Int,
+      pad: Edges, mar: Edges, bor: Edges, w: Float, h: Float,
+      mnw: Float, mnh: Float, mxw: Float, mxh: Float,
+      disp: Int, ch: List[Node]) -> Node =
+  rebuild(n, dir, wrap, just, ai, ac, gm, gc, gr, sh, bas, as_, pad, mar, bor, w, h,
+          mnw, mnh, mxw, mxh, disp, n.position, n.pos_top, n.pos_right, n.pos_bottom, n.pos_left,
+          n.width_pct, n.height_pct, ch)
 
 fn with_gap(n: Node, v: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     v, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_gaps(n: Node, main: Float, cross: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     main, cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_padding(n: Node, e: Edges) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     e, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_margin(n: Node, e: Edges) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, e, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_justify(n: Node, v: Int) -> Node =
-  set_field(n, n.direction, n.wrap, v, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, v, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_align(n: Node, v: Int) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, v, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, v, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_align_content(n: Node, v: Int) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, v,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, v,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_grow(n: Node, v: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, v, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_shrink(n: Node, v: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, v, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_flex(n: Node, gr: Float, sh: Float, bas: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, gr, sh, bas, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_basis(n: Node, v: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, v, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_size(n: Node, w: Float, h: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, w, h, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_min_size(n: Node, w: Float, h: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, w, h, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_max_size(n: Node, w: Float, h: Float) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, w, h,
     n.display, n.children)
 
 fn with_align_self(n: Node, v: Int) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, v,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_wrap(n: Node, v: Int) -> Node =
-  set_field(n, n.direction, v, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, v, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_border(n: Node, e: Edges) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, e, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
+fn with_position(n: Node, pos: Int, top: Float, right: Float, bottom: Float, left_: Float) -> Node =
+  rebuild(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, pos, top, right, bottom, left_, n.width_pct, n.height_pct, n.children)
+
+fn with_width_pct(n: Node, v: Float) -> Node =
+  rebuild(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.position, n.pos_top, n.pos_right, n.pos_bottom, n.pos_left, v, n.height_pct, n.children)
+
+fn with_height_pct(n: Node, v: Float) -> Node =
+  rebuild(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.position, n.pos_top, n.pos_right, n.pos_bottom, n.pos_left, n.width_pct, v, n.children)
+
 fn with_display(n: Node, v: Int) -> Node =
-  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
     n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
     v, n.children)
@@ -418,7 +462,7 @@ fn build_lines(node: Node, inner_main: Float) -> List[FlexLine] = {
 
   for i in 0..n_ch {
     let child = node.children[i]
-    if child.display == DISPLAY_NONE then () else {
+    if child.display == DISPLAY_NONE or child.position == POSITION_ABSOLUTE then () else {
       // Basis: explicit basis or child's CONTENT size (not available-filling)
       let b = if is_defined(child.basis) then child.basis
               else {
@@ -663,13 +707,12 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
 
       let n_lines = list.len(lines)
 
-      if n_lines == 0 then [self_rect]
-      else if n_lines == 1 then {
-        let rects = layout_line(node, lines[0], inner_main, inner_cross,
+      // Layout flex children
+      var flex_rects: List[LayoutRect] = []
+      if n_lines == 1 then {
+        flex_rects = layout_line(node, lines[0], inner_main, inner_cross,
                                 origin_main, origin_cross, inner_cross)
-        [self_rect] + rects
-      } else {
-        // Multi-line: distribute cross space via align-content
+      } else if n_lines > 1 then {
         var total_line_cross = 0.0
         for ln in lines { total_line_cross = total_line_cross + ln.cross_size }
         let cross_gaps = node.gap_cross * int.to_float(n_lines - 1)
@@ -693,21 +736,48 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
           let s = free_cross / (nlf + 1.0)
           line_offset = s
           line_spacing = node.gap_cross + s
-        } else ()  // ALIGN_START
+        } else ()
 
         var cursor_cross = line_offset
-        var all_rects: List[LayoutRect] = []
         for li in 0..n_lines {
           let ln = lines[li]
           let lc = ln.cross_size + line_stretch
           let oc = origin_cross + cursor_cross
           let rects = layout_line(node, ln, inner_main, inner_cross, origin_main, oc, lc)
-          all_rects = all_rects + rects
+          flex_rects = flex_rects + rects
           cursor_cross = cursor_cross + lc + line_spacing
         }
+      } else ()
 
-        [self_rect] + all_rects
+      // Layout absolute children (positioned relative to parent content box)
+      var abs_rects: List[LayoutRect] = []
+      for i in 0..n_ch {
+        let child = node.children[i]
+        if child.position == POSITION_ABSOLUTE then {
+          // Resolve percentage sizes
+          let cw = if is_defined(child.width_pct) then inner_w * child.width_pct / 100.0
+                   else if is_defined(child.width) then child.width
+                   else inner_w
+          let ch = if is_defined(child.height_pct) then inner_h * child.height_pct / 100.0
+                   else if is_defined(child.height) then child.height
+                   else inner_h
+          let cs = compute_size(child, cw, ch)
+          let aw = clamp_dim(cs.w, child.min_width, child.max_width)
+          let ah = clamp_dim(cs.h, child.min_height, child.max_height)
+
+          // Position: top/left take priority, then bottom/right
+          let ax = if is_defined(child.pos_left) then x + inset_left + child.pos_left
+                   else if is_defined(child.pos_right) then x + w - inset_left - aw - child.pos_right
+                   else x + inset_left
+          let ay = if is_defined(child.pos_top) then y + inset_top + child.pos_top
+                   else if is_defined(child.pos_bottom) then y + h - inset_top - ah - child.pos_bottom
+                   else y + inset_top
+
+          abs_rects = abs_rects + do_layout(child, ax, ay, aw, ah)
+        } else ()
       }
+
+      [self_rect] + flex_rects + abs_rects
     }
   }
 }

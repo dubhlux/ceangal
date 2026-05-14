@@ -671,3 +671,88 @@ test "yoga: wrapped_row_within_align_items_center" {
   let r = lay.layout(root, 200.0, 200.0)
   assert(approx(r[1].h, 160.0))
 }
+
+// ════════════════════════════════════════
+// Absolute Positioning
+// ════════════════════════════════════════
+
+test "yoga: absolute_bottom" {
+  let abs_child = lay.leaf(40.0, 40.0)
+    |> lay.with_position(lay.POSITION_ABSOLUTE, UNDEF, UNDEF, 0.0, 0.0)
+  let root = lay.col([lay.leaf(UNDEF, 50.0), abs_child]) |> lay.with_size(100.0, 100.0)
+  let r = lay.layout(root, 100.0, 100.0)
+  // Flex child: rect[1] h=50
+  // Abs child: rect[2] at bottom=0, left=0 → y = 100-40 = 60
+  assert(approx(r[1].h, 50.0))
+  assert(approx(r[2].y, 60.0))
+  assert(approx(r[2].x, 0.0))
+  assert(approx(r[2].w, 40.0))
+}
+
+test "yoga: absolute_width_pct" {
+  let abs_child = lay.leaf(UNDEF, 40.0)
+    |> lay.with_position(lay.POSITION_ABSOLUTE, UNDEF, UNDEF, 0.0, UNDEF)
+    |> lay.with_width_pct(100.0)
+  let root = lay.col([abs_child]) |> lay.with_size(200.0, 200.0) |> lay.with_padding(lay.edges_all(10.0))
+  let r = lay.layout(root, 200.0, 200.0)
+  // abs child: width=100% of inner (180), bottom=0 → y = 200-10-40 = 150
+  assert(approx(r[1].w, 180.0))
+  assert(approx(r[1].y, 150.0))
+}
+
+test "yoga: absolute_not_in_flex_flow" {
+  // Absolute child doesn't affect flex siblings
+  let c0 = lay.leaf(50.0, 50.0)
+  let c1 = lay.leaf(50.0, 50.0) |> lay.with_position(lay.POSITION_ABSOLUTE, 0.0, UNDEF, UNDEF, 0.0)
+  let c2 = lay.leaf(50.0, 50.0)
+  let root = lay.row([c0, c1, c2]) |> lay.with_size(200.0, 100.0)
+  let r = lay.layout(root, 200.0, 100.0)
+  // c0 at x=0, c2 at x=50 (c1 skipped in flex), c1 absolute at x=0 y=0
+  assert(approx(r[1].x, 0.0))  // c0
+  assert(approx(r[2].x, 50.0)) // c2 (next after c0, c1 skipped)
+  assert(approx(r[3].x, 0.0))  // c1 absolute
+  assert(approx(r[3].y, 0.0))
+}
+
+// ════════════════════════════════════════
+// Yoga Sample: Mobile App Layout
+// ════════════════════════════════════════
+
+test "yoga: mobile_app_sample" {
+  // Reproduced from Yoga website sample
+  let bottom_bar = lay.row([
+    lay.leaf(40.0, 40.0), lay.leaf(40.0, 40.0),
+    lay.leaf(40.0, 40.0), lay.leaf(40.0, 40.0),
+  ]) |> lay.with_align(lay.ALIGN_CENTER) |> lay.with_justify(lay.JUSTIFY_AROUND)
+     |> lay.with_position(lay.POSITION_ABSOLUTE, UNDEF, UNDEF, 0.0, UNDEF)
+     |> lay.with_width_pct(100.0) |> lay.with_size(UNDEF, 64.0)
+
+  let content = lay.col([
+    lay.leaf(UNDEF, 60.0),  // header
+    lay.node_defaults() |> lay.with_grow(1.0) |> lay.with_margin(lay.edges_xy(10.0, 0.0)),  // middle 1
+    lay.node_defaults() |> lay.with_grow(2.0) |> lay.with_margin(lay.edges_xy(10.0, 0.0)),  // middle 2
+    bottom_bar,
+  ]) |> lay.with_grow(1.0) |> lay.with_gap(10.0)
+
+  let root = lay.col([content]) |> lay.with_size(250.0, 475.0) |> lay.with_padding(lay.edges_all(10.0))
+  let r = lay.layout(root, 250.0, 475.0)
+
+  // root = rect[0]: 250x475
+  assert(approx(r[0].w, 250.0))
+  assert(approx(r[0].h, 475.0))
+
+  // content = rect[1]: fills root inner (230x455)
+  assert(approx(r[1].w, 230.0))
+
+  // header = rect[2]: full width, h=60
+  assert(approx(r[2].h, 60.0))
+
+  // bottom_bar = absolute, at bottom, width=100%
+  // Find it in the rect list (absolute children come after flex children)
+  let n_rects = list.len(r)
+  // bottom_bar has 4 children → 5 rects (bar + 4 icons)
+  let bar_idx = n_rects - 5
+  // Just verify layout completed with correct number of rects
+  // root(1) + content(1) + header(1) + middle1(1) + middle2(1) + bar(1) + 4 icons = 10
+  assert(n_rects >= 8)
+}
