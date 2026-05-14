@@ -151,6 +151,10 @@ function createGpuImports(canvas) {
       g(deviceId).queue.writeBuffer(g(bufferId), 0, new Uint8Array(buf));
       _dataChunks = []; _dataIsF32 = [];
     },
+    write_f32_at(deviceId, bufferId, byteOffset, value) {
+      const buf = new Float32Array([value]);
+      g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), buf);
+    },
     log_int(v) { console.log("[gpu]", N(v)); },
     log_str(ptr, len) { console.log("[gpu]", new TextDecoder().decode(new Uint8Array(_wasmMemory.buffer, N(ptr), N(len)))); },
   };
@@ -284,6 +288,39 @@ function setupTextInput(overlay, textarea, containerW, exports) {
   }
 }
 
+// ── Scroll animation loop (thin bridge to WASM scroll physics) ──
+
+class ScrollAnimator {
+  constructor() {
+    this._raf = null;
+    this._lastTime = 0;
+    this._tickFn = null; // (dt) => running:bool
+  }
+
+  kick() {
+    if (this._raf !== null) return;
+    this._lastTime = performance.now();
+    const loop = (now) => {
+      const dt = (now - this._lastTime) / 1000;
+      this._lastTime = now;
+      const running = this._tickFn ? this._tickFn(dt) : false;
+      if (running) {
+        this._raf = requestAnimationFrame(loop);
+      } else {
+        this._raf = null;
+      }
+    };
+    this._raf = requestAnimationFrame(loop);
+  }
+
+  stop() {
+    if (this._raf !== null) {
+      cancelAnimationFrame(this._raf);
+      this._raf = null;
+    }
+  }
+}
+
 // ── Init ──
 
 export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
@@ -353,41 +390,43 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   const container = canvas.parentElement;
   const imgHandles = { vtx: h(imgVertBuf), idx: h(imgIdxBuf), count: imageQuads.indices.length, tex: h(imgTexture), samp: h(imgSampler) };
 
-  function render() {
+  const animator = new ScrollAnimator();
+
+  function prepareScene() {
     const cw = container.clientWidth;
     const ch = container.clientHeight;
     const dpr = window.devicePixelRatio || 1;
-    // Physical pixels (tile-aligned) — what the GPU actually renders
     const pw = Math.floor(cw * dpr / 16) * 16;
     const ph = Math.floor(ch * dpr / 16) * 16;
     canvas.width = pw;
     canvas.height = ph;
 
-    // Re-configure canvas context (required after resize)
     _context = canvas.getContext("webgpu");
     _context.configure({ device: _device, format: _format, alphaMode: "premultiplied" });
 
-    // CSS size for layout/NDC, physical size for GPU buffers/tiles
-    if (instance.exports.do_render) {
-      instance.exports.do_render(
+    if (instance.exports.do_prepare) {
+      instance.exports.do_prepare(
         B(h(_device)), B(cw), B(ch), B(pw), B(ph),
-        B(imgHandles.vtx), B(imgHandles.idx), B(0),  // no images for Yoga sample
+        B(imgHandles.vtx), B(imgHandles.idx), B(0),
         B(imgHandles.tex), B(imgHandles.samp),
       );
     }
 
-    // Rebuild overlay
     overlayEl.innerHTML = "";
     if (instance.exports.init_overlay) {
-      try {
-        instance.exports.init_overlay(B(h(overlayEl)), B(cw), B(ch));
-      } catch (_) {}
+      try { instance.exports.init_overlay(B(h(overlayEl)), B(cw), B(ch)); } catch (_) {}
     }
   }
 
+  // WASM scroll_tick returns 1 if still animating
+  animator._tickFn = (dt) => {
+    if (!instance.exports.scroll_tick) return false;
+    return N(instance.exports.scroll_tick(dt)) === 1;
+  };
+
   function renderAll() {
-    render();
-    // Rebuild textarea position
+    animator.stop();
+    prepareScene();
     const existing = overlayEl.querySelector(".input-area");
     if (existing) existing.remove();
     setupTextInput(overlayEl, textareaEl, container.clientWidth, instance.exports);
@@ -396,10 +435,21 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   renderAll();
   console.log("ceangal: ready");
 
-  // Resize handler (debounced)
+  // ── Input events → WASM ──
+  canvas.style.touchAction = "none";
+  canvas.style.overscrollBehavior = "none";
+
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const dy = e.deltaMode === 1 ? -e.deltaY * 20 : -e.deltaY;
+    if (instance.exports.scroll_wheel) {
+      instance.exports.scroll_wheel(dy);
+      animator.kick();
+    }
+  }, { passive: false });
+
   let resizeTimer;
   window.addEventListener("resize", () => {
-    // Hide overlay during resize to avoid stale positions
     overlayEl.style.visibility = "hidden";
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
@@ -407,5 +457,8 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
       overlayEl.style.visibility = "";
     }, 150);
   });
-  console.log("ceangal: ready");
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) animator.stop();
+  });
 }

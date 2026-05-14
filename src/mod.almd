@@ -273,6 +273,31 @@ fn textarea_w(vw: Int, vh: Int) -> Float = 0.0
 // Local constant (cross-module let workaround)
 let AUTO = -1.0
 
+// ── Scene cache (module-level var, persists across frames) ──
+
+var cached_scene: snaidhm.SceneHandle = {
+  device: 0, width: 0, height: 0, tiles_x: 0, viewport_tiles_y: 0,
+  params_buf: 0, pixel_buf: 0,
+  compute_pipeline: 0, compute_bg: 0,
+  quad_pipeline: 0, quad_bg: 0,
+  img_pipeline: 0, img_bg: 0,
+  img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
+}
+var scene_ready = false
+var cached_content_height = 0.0
+var cached_viewport_height = 0.0
+
+// ── Scroll physics state ──
+
+let SCROLL_IDLE = 0
+let SCROLL_COASTING = 1
+let SCROLL_BOUNCING = 2
+
+var scroll_pos = 0.0
+var scroll_vel = 0.0
+var scroll_min_bound = 0.0
+var scroll_state = 0
+
 // ── Text-aware layout nodes ──
 // TextEntry: links a layout node index to text content for rendering
 
@@ -319,74 +344,113 @@ fn px_to_ndc_h(px: Float, vh: Float) -> Float = px / vh * 2.0
 
 // ── Render scene via snaidhm (layout-driven) ──
 
-@export(wasm, "render_scene")
-fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
-  // CSS size: layout + NDC conversion (resolution-independent positioning)
+// ── Build scene data (cubics, paints, shadows) from layout ──
+
+fn build_scene_data(vw: Float, vh: Float) -> { cubics: List[snaidhm.Cubic], paints: List[snaidhm.Paint], shadows: List[snaidhm.Shadow], content_h: Float } = {
+  let dc = [0.5, 0.5, 0.5, 1.0]
+  // Content = 200% of viewport height
+  // Top half (0-100%): red rect, Bottom half (100-200%): blue rect
+  // Small corner radius to avoid degenerate cubics
+  let red_cubics = snaidhm.round_rect_cubics(-1.0, -1.0, 2.0, 2.0, 0.01, dc, 0)
+  let blue_cubics = snaidhm.round_rect_cubics(-1.0, -3.0, 2.0, 2.0, 0.01, dc, 1)
+  let cubics = red_cubics + blue_cubics
+  let paints = [
+    snaidhm.solid(0.9, 0.2, 0.2, 1.0),
+    snaidhm.solid(0.2, 0.3, 0.9, 1.0),
+  ]
+  let shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
+  let content_h = vh * 2.0
+  { cubics: cubics, paints: paints, shadows: shadows, content_h: content_h }
+}
+
+// ── Prepare scene (called on init + resize) ──
+
+@export(wasm, "prepare_scene")
+fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
   let vw = int.to_float(css_w)
   let vh = int.to_float(css_h)
 
-  let font = ttf.parse_font()
-  let demo = build_demo_layout(font, vw, vh)
-  let rects = demo.rects
+  let data = build_scene_data(vw, vh)
 
-  var cubics: List[snaidhm.Cubic] = []
-  var paints: List[snaidhm.Paint] = []
-  var shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
-  let dc = [0.5, 0.5, 0.5, 1.0]
-  var pid = 0
-  let cr = px_to_ndc_w(6.0, vw)
+  // content_height in physical pixels (same DPR scaling as phys_h)
+  let dpr_scale = int.to_float(phys_h) / vh
+  let content_phys_h = float.to_int(data.content_h * dpr_scale) / 16 * 16
+  cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, content_phys_h, data.cubics, data.shadows, data.paints,
+    img_vtx, img_idx, img_count, img_texture, img_sampler)
+  scene_ready = true
+  cached_content_height = data.content_h
+  cached_viewport_height = vh
 
-  // Music player rendered elements
-  // Tree: 0=root, 1=phone, 2=content, 3=status_bar, 4=time, 5=signal,
-  //   6=art_container, 7=album_art, 8=track_info, 9=title, 10=artist,
-  //   11=progress_col, 12=bar_row, 13=bar_fill, 14=bar_bg, 15=time_row, 16=elapsed, 17=remaining,
-  //   18=controls, 19=shuffle, 20=prev, 21=play, 22=next, 23=repeat,
-  //   24=nav, 25=nav0, 26=nav1, 27=nav2
-  let shape_colors = [
-    [0.12, 0.12, 0.16, 1.0],      // phone bg
-    [0.55, 0.40, 0.70, 1.0],      // album art (visible purple)
-    [0.35, 0.6, 0.95, 1.0],       // bar fill (accent)
-    [0.25, 0.25, 0.30, 1.0],      // bar bg
-    [1.0, 1.0, 1.0, 1.0],         // play (white)
-    [0.6, 0.6, 0.65, 1.0],        // prev
-    [0.6, 0.6, 0.65, 1.0],        // next
-    [0.45, 0.45, 0.5, 1.0],       // shuffle
-    [0.45, 0.45, 0.5, 1.0],       // repeat
-    [0.35, 0.35, 0.4, 1.0],       // nav0
-    [0.6, 0.6, 0.95, 1.0],        // nav1 (active)
-    [0.35, 0.35, 0.4, 1.0],       // nav2
-  ]
-  let render_indices = [1, 7, 13, 14, 21, 20, 22, 19, 23, 25, 26, 27]
+  // Set scroll bounds
+  scroll_min_bound = 0.0 - float.max(0.0, data.content_h - vh)
+  scroll_pos = float.max(scroll_min_bound, float.min(0.0, scroll_pos))
 
-  // si=4 is play button (circle), si=1 is album art (larger corner radius)
-  for si in 0..list.len(render_indices) {
-    let ri = render_indices[si]
-    let rect = rects[ri]
-    let nx = px_to_ndc_x(rect.x, vw)
-    let ny = px_to_ndc_y(rect.y + rect.h, vh)
-    let nw = px_to_ndc_w(rect.w, vw)
-    let nh = px_to_ndc_h(rect.h, vh)
-    let node_cr = if si == 4 then float.min(nw, nh) / 2.0  // play = circle
-                  else if si == 1 then px_to_ndc_w(12.0, vw)  // album art = larger radius
-                  else if si >= 5 and si <= 8 then float.min(nw, nh) / 2.0  // control buttons = circles
-                  else if si >= 9 then px_to_ndc_w(4.0, vw)  // nav = small radius
-                  else cr
-    cubics = cubics + snaidhm.round_rect_cubics(nx, ny, nw, nh, node_cr, dc, pid)
-    paints = paints + [snaidhm.solid(shape_colors[si][0], shape_colors[si][1], shape_colors[si][2], shape_colors[si][3])]
-    pid = pid + 1
-  }
-  let num_shape_paints = pid
+  // Draw first frame immediately
+  snaidhm.draw_frame(cached_scene, 0.0)
+}
 
-  // Text from layout
-  let text = render_texts(demo.texts, rects, vw, vh)
-  var text_cubics: List[snaidhm.Cubic] = []
-  for cub in text.cubics {
-    text_cubics = text_cubics + [{
-      a: cub.a, b: cub.b, c: cub.c, d: cub.d,
-      color: cub.color, path_id: cub.path_id + num_shape_paints
-    }]
-  }
+// ── Scroll API (called from JS event bridge) ──
 
-  snaidhm.render_scene(device, phys_w, phys_h, cubics + text_cubics, shadows, paints + text.paints,
-    img_vtx, img_idx, img_count, img_texture, img_sampler, 0.0)
+fn scroll_is_overscrolled() -> Bool =
+  scroll_pos > 0.5 or scroll_pos < scroll_min_bound - 0.5
+
+fn draw_at_scroll() -> Unit = {
+  if scene_ready then {
+    let dpr = int.to_float(cached_scene.height) / cached_viewport_height
+    snaidhm.draw_frame(cached_scene, scroll_pos * dpr)
+  } else ()
+}
+
+@export(wasm, "scroll_wheel")
+fn scroll_wheel(dy: Float) -> Unit = {
+  scroll_vel = dy * 2.0
+  scroll_pos = scroll_pos + dy
+  scroll_state = if scroll_is_overscrolled() then SCROLL_BOUNCING else SCROLL_COASTING
+  draw_at_scroll()
+}
+
+@export(wasm, "scroll_tick")
+fn scroll_tick(dt_raw: Float) -> Int = {
+  let dt = float.min(dt_raw, 1.0 / 30.0)
+
+  if scroll_state == SCROLL_COASTING then {
+    // Friction decay
+    let frames = dt * 60.0
+    var decay = 1.0
+    // math.pow workaround: manual exponential for small frame counts
+    let base = 0.95  // 1.0 - friction(0.05)
+    decay = base * base * base  // ~0.857 for 3 frames at 60fps nominal
+    if frames < 1.5 then { decay = base } else ()
+    if frames > 2.5 then { decay = base * base * base * base } else ()
+    scroll_vel = scroll_vel * decay
+    scroll_pos = scroll_pos + scroll_vel * dt
+    if scroll_is_overscrolled() then {
+      scroll_state = SCROLL_BOUNCING
+      scroll_vel = scroll_vel * 0.15
+    } else if float.abs(scroll_vel) < 0.5 then {
+      scroll_state = SCROLL_IDLE
+    } else ()
+  } else if scroll_state == SCROLL_BOUNCING then {
+    let target = if scroll_pos < scroll_min_bound then scroll_min_bound else 0.0
+    let disp = scroll_pos - target
+    let force = 0.0 - 100.0 * disp - 20.0 * scroll_vel
+    scroll_vel = scroll_vel + force * dt
+    scroll_pos = scroll_pos + scroll_vel * dt
+    scroll_pos = float.max(scroll_min_bound - 120.0, float.min(120.0, scroll_pos))
+    if float.abs(disp) < 0.5 and float.abs(scroll_vel) < 0.5 then {
+      scroll_pos = target
+      scroll_vel = 0.0
+      scroll_state = SCROLL_IDLE
+    } else ()
+  } else ()
+
+  draw_at_scroll()
+  if scroll_state != SCROLL_IDLE then 1 else 0
+}
+
+// ── Legacy one-shot render (backwards compat) ──
+
+@export(wasm, "render_scene")
+fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
+  do_prepare(device, css_w, css_h, phys_w, phys_h, img_vtx, img_idx, img_count, img_texture, img_sampler)
 }
