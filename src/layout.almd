@@ -40,6 +40,18 @@ let POSITION_ABSOLUTE = 1
 
 let MARGIN_AUTO = -2.0
 
+// Percentage encoding: -100 - pct. e.g., 50% = -150.0, 10% = -110.0
+fn pct(v: Float) -> Float = -100.0 - v
+fn is_pct(v: Float) -> Bool = v < -99.0 and v > -201.0
+fn resolve_pct(v: Float, base: Float) -> Float =
+  if is_pct(v) then (-100.0 - v) / 100.0 * base
+  else v
+
+// Resolve padding/margin edges against parent width (CSS spec: all % resolve against width)
+fn resolve_edges(e: Edges, base: Float) -> Edges =
+  { top: resolve_pct(e.top, base), right: resolve_pct(e.right, base),
+    bottom: resolve_pct(e.bottom, base), left: resolve_pct(e.left, base) }
+
 // ── Edge values ──
 
 type Edges = { top: Float, right: Float, bottom: Float, left: Float }
@@ -715,11 +727,12 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
     if n_ch == 0 then [self_rect]
     else {
       let dir = node.direction
-      let ps = pad_start(node)
-      let inset_h = edges_h(node.padding) + edges_h(node.border)
-      let inset_v = edges_v(node.padding) + edges_v(node.border)
-      let inset_left = node.padding.left + node.border.left
-      let inset_top = node.padding.top + node.border.top
+      // Resolve percentage padding against own width
+      let rpad = resolve_edges(node.padding, w)
+      let inset_h = edges_h(rpad) + edges_h(node.border)
+      let inset_v = edges_v(rpad) + edges_v(node.border)
+      let inset_left = rpad.left + node.border.left
+      let inset_top = rpad.top + node.border.top
       let inner_w = w - inset_h
       let inner_h = h - inset_v
       let inner_main = if is_row(dir) then inner_w else inner_h

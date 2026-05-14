@@ -833,3 +833,28 @@ test "yoga: auto_margin_cross_center" {
   // cross free = 100 - 30 = 70. Auto both → 35 each. y = 35.
   assert(approx(r[1].y, 35.0))
 }
+
+// ════════════════════════════════════════
+// Percentage Padding
+// ════════════════════════════════════════
+
+test "yoga: padding_percentage" {
+  // padding: 10% → resolves against parent width (200) → 20px each side
+  let root = lay.col([lay.leaf(50.0, 50.0)])
+    |> lay.with_size(200.0, 200.0)
+    |> lay.with_padding({ top: lay.pct(10.0), right: lay.pct(10.0), bottom: lay.pct(10.0), left: lay.pct(10.0) })
+  let r = lay.layout(root, 200.0, 200.0)
+  // child at (20, 20) with size 50x50
+  assert(approx(r[1].x, 20.0))
+  assert(approx(r[1].y, 20.0))
+}
+
+test "yoga: padding_percentage_asymmetric" {
+  // padding-left: 5%, padding-right: 10% against width=400 → 20, 40
+  let root = lay.row([lay.leaf(100.0, 50.0)])
+    |> lay.with_size(400.0, 100.0)
+    |> lay.with_padding({ top: 0.0, right: lay.pct(10.0), bottom: 0.0, left: lay.pct(5.0) })
+  let r = lay.layout(root, 400.0, 100.0)
+  // child at x=20 (5% of 400)
+  assert(approx(r[1].x, 20.0))
+}
