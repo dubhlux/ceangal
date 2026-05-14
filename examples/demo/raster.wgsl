@@ -176,7 +176,11 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
       area += seg_area(sp0, sp1);
     }
 
-    let coverage = min(abs(area), 1.0);
+    let raw_cov = min(abs(area), 1.0);
+    // Attenuate low coverage to suppress all-columns-left horizontal artifacts
+    // Scale threshold with resolution (higher res = more artifact segments = higher threshold)
+    let cov_thresh = 0.15 * f32(params.width) / 512.0;
+    let coverage = raw_cov * smoothstep(0.0, cov_thresh, raw_cov);
     if coverage > 1e-4 {
       let paint_color = evaluate_paint(paints[path_id], p);
       color = mix(color, paint_color.rgb, coverage * paint_color.a);

@@ -3,11 +3,17 @@
 <head>
   <title>ceangal — UI framework demo</title>
   <style>
-    body { margin: 0; background: #111; display: flex; justify-content: center; align-items: center; height: 100vh; }
-    .canvas-container { position: relative; width: 512px; height: 512px; }
-    canvas { width: 512px; height: 512px; display: block; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #1a1a2e; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+    .canvas-container {
+      position: relative;
+      /* Fill viewport, maintain square aspect ratio, with padding */
+      width: min(calc(100vw - 32px), calc(100vh - 32px));
+      height: min(calc(100vw - 32px), calc(100vh - 32px));
+    }
+    canvas { width: 100%; height: 100%; display: block; }
     .text-overlay {
-      position: absolute; top: 0; left: 0; width: 512px; height: 512px;
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       pointer-events: none;
     }
     .text-overlay span, .text-overlay h1, .text-overlay h2, .text-overlay h3 {
@@ -18,7 +24,7 @@
       -webkit-user-select: text;
       user-select: text;
       white-space: nowrap;
-      line-height: 1;
+      line-height: 1.3;
     }
     .text-overlay span::selection, .text-overlay h1::selection,
     .text-overlay h2::selection, .text-overlay h3::selection {
@@ -56,7 +62,7 @@
   </style>
 </head>
 <body>
-  <div class="canvas-container">
+  <div class="canvas-container" id="container">
     <canvas id="canvas" width="512" height="512"></canvas>
     <div id="text-overlay" class="text-overlay"></div>
     <textarea id="ime-input" class="ime-textarea" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" rows="1"></textarea>

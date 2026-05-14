@@ -219,38 +219,69 @@ function buildImageQuads() {
 
 // ── Text input (JS-side) ──
 
-function setupTextInput(overlay, textarea, canvasW, exports) {
-  // Get textarea position from layout engine (pixel coordinates)
-  const left = exports.textarea_x ? Number(exports.textarea_x()) : 344;
-  const top = exports.textarea_y ? Number(exports.textarea_y()) : 316;
-  const width = exports.textarea_w ? Number(exports.textarea_w()) : 132;
+// Persistent textarea state (survives resize rebuilds)
+let _textareaListenersAttached = false;
+
+function setupTextInput(overlay, textarea, containerW, exports) {
+  const left = exports.textarea_x ? Number(exports.textarea_x(B(containerW), B(containerW))) : 344;
+  const top = exports.textarea_y ? Number(exports.textarea_y(B(containerW), B(containerW))) : 316;
+  const width = exports.textarea_w ? Number(exports.textarea_w(B(containerW), B(containerW))) : 132;
+  const scale = containerW / 512;
+  const fontSize = 11 * scale;
 
   const inputArea = document.createElement("div");
   inputArea.className = "input-area";
   inputArea.setAttribute("role", "textbox");
   inputArea.setAttribute("aria-label", "Text input field");
-  Object.assign(inputArea.style, { left: left+"px", top: top+"px", width: width+"px", fontSize: "11px", fontFamily: "sans-serif" });
+  Object.assign(inputArea.style, { left: left+"px", top: top+"px", width: width+"px", fontSize: fontSize+"px", fontFamily: "sans-serif" });
 
   const display = document.createElement("div");
   display.className = "input-display";
   inputArea.appendChild(display);
   overlay.appendChild(inputArea);
 
-  Object.assign(textarea.style, { left: left+"px", top: top+"px", width: width+"px", height: "1.4em", fontSize: "11px" });
+  overlay.appendChild(textarea);
+  Object.assign(textarea.style, { left: left+"px", top: top+"px", width: width+"px", height: "1.4em", fontSize: fontSize+"px" });
 
-  let focused = false;
-  function renderPh() {
-    display.innerHTML = "";
-    if (!focused && textarea.value === "") {
-      const ph = document.createElement("span"); ph.className = "placeholder"; ph.textContent = "Type here...";
-      display.appendChild(ph);
-    }
+  // Show current state (text or placeholder)
+  const isFocused = document.activeElement === textarea;
+  display.innerHTML = "";
+  if (textarea.value && !isFocused) {
+    display.appendChild(document.createTextNode(textarea.value));
+  } else if (!textarea.value && !isFocused) {
+    const ph = document.createElement("span"); ph.className = "placeholder"; ph.textContent = "Type here...";
+    display.appendChild(ph);
   }
-  inputArea.addEventListener("click", () => { textarea.style.pointerEvents = "auto"; textarea.focus(); });
-  textarea.addEventListener("focus", () => { focused = true; textarea.style.color = "#333"; textarea.style.caretColor = "#333"; inputArea.style.outline = "1.5px solid rgba(66,133,244,0.6)"; inputArea.style.outlineOffset = "2px"; inputArea.style.borderRadius = "2px"; renderPh(); });
-  textarea.addEventListener("blur", () => { focused = false; textarea.style.color = "transparent"; textarea.style.caretColor = "transparent"; textarea.style.pointerEvents = "none"; inputArea.style.outline = "none"; display.innerHTML = ""; if (textarea.value) display.appendChild(document.createTextNode(textarea.value)); else renderPh(); });
-  textarea.addEventListener("input", () => renderPh());
-  renderPh();
+
+  // Attach event listeners only once
+  if (!_textareaListenersAttached) {
+    _textareaListenersAttached = true;
+
+    function getDisplay() { return overlay.querySelector(".input-display"); }
+    function getInputArea() { return overlay.querySelector(".input-area"); }
+
+    function renderContent() {
+      const d = getDisplay(); if (!d) return;
+      d.innerHTML = "";
+      if (document.activeElement !== textarea && textarea.value === "") {
+        const ph = document.createElement("span"); ph.className = "placeholder"; ph.textContent = "Type here...";
+        d.appendChild(ph);
+      }
+    }
+
+    inputArea.addEventListener("click", () => { textarea.style.pointerEvents = "auto"; textarea.focus(); });
+    textarea.addEventListener("focus", () => {
+      textarea.style.color = "#333"; textarea.style.caretColor = "#333";
+      const ia = getInputArea(); if (ia) { ia.style.outline = "1.5px solid rgba(66,133,244,0.6)"; ia.style.outlineOffset = "2px"; ia.style.borderRadius = "2px"; }
+      renderContent();
+    });
+    textarea.addEventListener("blur", () => {
+      textarea.style.color = "transparent"; textarea.style.caretColor = "transparent"; textarea.style.pointerEvents = "none";
+      const ia = getInputArea(); if (ia) ia.style.outline = "none";
+      const d = getDisplay(); if (d) { d.innerHTML = ""; if (textarea.value) d.appendChild(document.createTextNode(textarea.value)); else renderContent(); }
+    });
+    textarea.addEventListener("input", renderContent);
+  }
 }
 
 // ── Init ──
@@ -319,27 +350,62 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   if (instance.exports._start) try { instance.exports._start(); } catch (_) {}
 
-  // 1. Render scene via snaidhm (GPU)
-  if (instance.exports.do_render) {
-    instance.exports.do_render(
-      B(h(_device)),
-      B(h(imgVertBuf)), B(h(imgIdxBuf)), B(imageQuads.indices.length),
-      B(h(imgTexture)), B(h(imgSampler)),
-    );
-    console.log("ceangal: snaidhm render complete");
-  }
+  const container = canvas.parentElement;
+  const imgHandles = { vtx: h(imgVertBuf), idx: h(imgIdxBuf), count: imageQuads.indices.length, tex: h(imgTexture), samp: h(imgSampler) };
 
-  // 2. Create DOM overlay via ceangal (Almide)
-  if (instance.exports.init_overlay) {
-    try {
-      instance.exports.init_overlay(B(h(overlayEl)), B(canvas.clientWidth), B(canvas.clientHeight));
-      console.log("ceangal: overlay created");
-    } catch (e) {
-      console.warn("ceangal: overlay failed:", e.message);
+  function render() {
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    const dpr = window.devicePixelRatio || 1;
+    // Physical pixels (tile-aligned) — what the GPU actually renders
+    const pw = Math.floor(cw * dpr / 16) * 16;
+    const ph = Math.floor(ch * dpr / 16) * 16;
+    canvas.width = pw;
+    canvas.height = ph;
+
+    // Re-configure canvas context (required after resize)
+    _context = canvas.getContext("webgpu");
+    _context.configure({ device: _device, format: _format, alphaMode: "premultiplied" });
+
+    // CSS size for layout/NDC, physical size for GPU buffers/tiles
+    if (instance.exports.do_render) {
+      instance.exports.do_render(
+        B(h(_device)), B(cw), B(ch), B(pw), B(ph),
+        B(imgHandles.vtx), B(imgHandles.idx), B(imgHandles.count),
+        B(imgHandles.tex), B(imgHandles.samp),
+      );
+    }
+
+    // Rebuild overlay
+    overlayEl.innerHTML = "";
+    if (instance.exports.init_overlay) {
+      try {
+        instance.exports.init_overlay(B(h(overlayEl)), B(cw), B(ch));
+      } catch (_) {}
     }
   }
 
-  // 3. Text input (JS-side)
-  setupTextInput(overlayEl, textareaEl, canvas.clientWidth, instance.exports);
-  console.log("ceangal: text input ready");
+  function renderAll() {
+    render();
+    // Rebuild textarea position
+    const existing = overlayEl.querySelector(".input-area");
+    if (existing) existing.remove();
+    setupTextInput(overlayEl, textareaEl, container.clientWidth, instance.exports);
+  }
+
+  renderAll();
+  console.log("ceangal: ready");
+
+  // Resize handler (debounced)
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    // Hide overlay during resize to avoid stale positions
+    overlayEl.style.visibility = "hidden";
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      renderAll();
+      overlayEl.style.visibility = "";
+    }, 150);
+  });
+  console.log("ceangal: ready");
 }
