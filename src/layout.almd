@@ -92,6 +92,7 @@ type Node = {
 
   width: Float,
   height: Float,
+  aspect_ratio: Float,   // UNDEFINED = none, e.g., 1.5 = width/height
   min_width: Float,      // default 0
   min_height: Float,
   max_width: Float,      // UNDEFINED = no limit
@@ -121,7 +122,7 @@ fn node_defaults() -> Node = {
   gap_main: 0.0, gap_cross: 0.0,
   grow: 0.0, shrink: 0.0, basis: UNDEFINED, align_self: -1,
   padding: edges_zero, margin: edges_zero, border: edges_zero,
-  width: UNDEFINED, height: UNDEFINED,
+  width: UNDEFINED, height: UNDEFINED, aspect_ratio: UNDEFINED,
   min_width: 0.0, min_height: 0.0, max_width: UNDEFINED, max_height: UNDEFINED,
   display: DISPLAY_FLEX, position: POSITION_RELATIVE,
   pos_top: UNDEFINED, pos_right: UNDEFINED, pos_bottom: UNDEFINED, pos_left: UNDEFINED,
@@ -136,7 +137,7 @@ fn copy_node(n: Node) -> Node = {
   gap_main: n.gap_main, gap_cross: n.gap_cross,
   grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
   padding: n.padding, margin: n.margin, border: n.border,
-  width: n.width, height: n.height,
+  width: n.width, height: n.height, aspect_ratio: n.aspect_ratio,
   min_width: n.min_width, min_height: n.min_height,
   max_width: n.max_width, max_height: n.max_height,
   display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: n.children,
@@ -147,7 +148,7 @@ fn row(children: List[Node]) -> Node = {
   { direction: ROW, wrap: n.wrap, justify: n.justify, align_items: n.align_items,
     align_content: n.align_content, gap_main: n.gap_main, gap_cross: n.gap_cross,
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
-    padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height,
+    padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height, aspect_ratio: n.aspect_ratio,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
     display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
 }
@@ -157,7 +158,7 @@ fn col(children: List[Node]) -> Node = {
   { direction: COLUMN, wrap: n.wrap, justify: n.justify, align_items: n.align_items,
     align_content: n.align_content, gap_main: n.gap_main, gap_cross: n.gap_cross,
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
-    padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height,
+    padding: n.padding, margin: n.margin, border: n.border, width: n.width, height: n.height, aspect_ratio: n.aspect_ratio,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
     display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: children }
 }
@@ -167,7 +168,7 @@ fn leaf(w: Float, h: Float) -> Node = {
   { direction: n.direction, wrap: n.wrap, justify: n.justify, align_items: n.align_items,
     align_content: n.align_content, gap_main: n.gap_main, gap_cross: n.gap_cross,
     grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
-    padding: n.padding, margin: n.margin, border: n.border, width: w, height: h,
+    padding: n.padding, margin: n.margin, border: n.border, width: w, height: h, aspect_ratio: n.aspect_ratio,
     min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
     display: n.display, position: n.position, pos_top: n.pos_top, pos_right: n.pos_right, pos_bottom: n.pos_bottom, pos_left: n.pos_left, width_pct: n.width_pct, height_pct: n.height_pct, children: [] }
 }
@@ -177,13 +178,13 @@ fn leaf(w: Float, h: Float) -> Node = {
 // Rebuild node with all fields. with_* functions override specific fields.
 fn rebuild(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
            gm: Float, gc: Float, gr: Float, sh: Float, bas: Float, as_: Int,
-           pad: Edges, mar: Edges, bor: Edges, w: Float, h: Float,
+           pad: Edges, mar: Edges, bor: Edges, w: Float, h: Float, ar: Float,
            mnw: Float, mnh: Float, mxw: Float, mxh: Float,
            disp: Int, pos: Int, pt: Float, pr: Float, pb: Float, pl: Float,
            wpct: Float, hpct: Float, ch: List[Node]) -> Node =
   { direction: dir, wrap: wrap, justify: just, align_items: ai, align_content: ac,
     gap_main: gm, gap_cross: gc, grow: gr, shrink: sh, basis: bas, align_self: as_,
-    padding: pad, margin: mar, border: bor, width: w, height: h,
+    padding: pad, margin: mar, border: bor, width: w, height: h, aspect_ratio: ar,
     min_width: mnw, min_height: mnh, max_width: mxw, max_height: mxh,
     display: disp, position: pos, pos_top: pt, pos_right: pr, pos_bottom: pb, pos_left: pl,
     width_pct: wpct, height_pct: hpct, children: ch }
@@ -191,137 +192,143 @@ fn rebuild(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
 // Shorthand: copy all new fields from n
 fn sf(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
       gm: Float, gc: Float, gr: Float, sh: Float, bas: Float, as_: Int,
-      pad: Edges, mar: Edges, bor: Edges, w: Float, h: Float,
+      pad: Edges, mar: Edges, bor: Edges, w: Float, h: Float, ar: Float,
       mnw: Float, mnh: Float, mxw: Float, mxh: Float,
       disp: Int, ch: List[Node]) -> Node =
-  rebuild(n, dir, wrap, just, ai, ac, gm, gc, gr, sh, bas, as_, pad, mar, bor, w, h,
+  rebuild(n, dir, wrap, just, ai, ac, gm, gc, gr, sh, bas, as_, pad, mar, bor, w, h, ar,
           mnw, mnh, mxw, mxh, disp, n.position, n.pos_top, n.pos_right, n.pos_bottom, n.pos_left,
           n.width_pct, n.height_pct, ch)
 
 fn with_gap(n: Node, v: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     v, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_gaps(n: Node, main: Float, cross: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     main, cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_padding(n: Node, e: Edges) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    e, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    e, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_margin(n: Node, e: Edges) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, e, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, e, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_justify(n: Node, v: Int) -> Node =
   sf(n, n.direction, n.wrap, v, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_align(n: Node, v: Int) -> Node =
   sf(n, n.direction, n.wrap, n.justify, v, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_align_content(n: Node, v: Int) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, v,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_grow(n: Node, v: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, v, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_shrink(n: Node, v: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, v, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_flex(n: Node, gr: Float, sh: Float, bas: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, gr, sh, bas, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_basis(n: Node, v: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, v, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_size(n: Node, w: Float, h: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, w, h, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, w, h, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_min_size(n: Node, w: Float, h: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, w, h, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, w, h, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_max_size(n: Node, w: Float, h: Float) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, w, h,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, w, h,
     n.display, n.children)
 
 fn with_align_self(n: Node, v: Int) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, v,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_wrap(n: Node, v: Int) -> Node =
   sf(n, n.direction, v, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_border(n: Node, e: Edges) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, e, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, e, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.children)
 
 fn with_position(n: Node, pos: Int, top: Float, right: Float, bottom: Float, left_: Float) -> Node =
   rebuild(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, pos, top, right, bottom, left_, n.width_pct, n.height_pct, n.children)
 
 fn with_width_pct(n: Node, v: Float) -> Node =
   rebuild(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.position, n.pos_top, n.pos_right, n.pos_bottom, n.pos_left, v, n.height_pct, n.children)
 
 fn with_height_pct(n: Node, v: Float) -> Node =
   rebuild(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     n.display, n.position, n.pos_top, n.pos_right, n.pos_bottom, n.pos_left, n.width_pct, v, n.children)
+
+fn with_aspect_ratio(n: Node, v: Float) -> Node =
+  sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.border, n.width, n.height, v, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
 
 fn with_display(n: Node, v: Int) -> Node =
   sf(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
     n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
-    n.padding, n.margin, n.border, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.padding, n.margin, n.border, n.width, n.height, n.aspect_ratio, n.min_width, n.min_height, n.max_width, n.max_height,
     v, n.children)
 
 // ── Constraint helpers ──
@@ -420,8 +427,21 @@ fn compute_size(node: Node, avail_w: Float, avail_h: Float) -> Size = {
       let h = if is_defined(node.height) then node.height
               else if is_defined(avail_h) then avail_h
               else inset_h
-      // min/max NOT applied — enforced in resolve_line_flex and layout_line
-      { w: float.max(w, inset_w), h: float.max(h, inset_h) }
+      // Apply aspect ratio: if one dimension is known and the other isn't
+      let aw = if not is_defined(node.width) and is_defined(node.height) and is_defined(node.aspect_ratio) then
+                 h * node.aspect_ratio
+               else w
+      let ah = if not is_defined(node.height) and is_defined(node.width) and is_defined(node.aspect_ratio) then
+                 w / node.aspect_ratio
+               else h
+      // Also apply when both undefined but available gives one dimension
+      let fw = if is_defined(node.aspect_ratio) and not is_defined(node.width) and not is_defined(node.height) and is_defined(avail_w) then
+                 avail_w
+               else aw
+      let fh = if is_defined(node.aspect_ratio) and not is_defined(node.width) and not is_defined(node.height) and is_defined(avail_w) then
+                 avail_w / node.aspect_ratio
+               else ah
+      { w: float.max(fw, inset_w), h: float.max(fh, inset_h) }
     } else {
       let inner_m = if is_defined(am) then am - pm else UNDEFINED
 

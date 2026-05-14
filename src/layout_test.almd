@@ -772,7 +772,7 @@ test "yoga: row_reverse" {
   // Reverse: child0 at right, child1 to its left
   let root_rev = lay.rebuild(root, lay.ROW_REVERSE, root.wrap, root.justify, root.align_items, root.align_content,
     root.gap_main, root.gap_cross, root.grow, root.shrink, root.basis, root.align_self,
-    root.padding, root.margin, root.border, root.width, root.height,
+    root.padding, root.margin, root.border, root.width, root.height, root.aspect_ratio,
     root.min_width, root.min_height, root.max_width, root.max_height,
     root.display, root.position, root.pos_top, root.pos_right, root.pos_bottom, root.pos_left,
     root.width_pct, root.height_pct, root.children)
@@ -793,7 +793,7 @@ test "yoga: column_reverse" {
 
   let root_rev = lay.rebuild(root, lay.COLUMN_REVERSE, root.wrap, root.justify, root.align_items, root.align_content,
     root.gap_main, root.gap_cross, root.grow, root.shrink, root.basis, root.align_self,
-    root.padding, root.margin, root.border, root.width, root.height,
+    root.padding, root.margin, root.border, root.width, root.height, root.aspect_ratio,
     root.min_width, root.min_height, root.max_width, root.max_height,
     root.display, root.position, root.pos_top, root.pos_right, root.pos_bottom, root.pos_left,
     root.width_pct, root.height_pct, root.children)
@@ -847,6 +847,37 @@ test "yoga: padding_percentage" {
   // child at (20, 20) with size 50x50
   assert(approx(r[1].x, 20.0))
   assert(approx(r[1].y, 20.0))
+}
+
+// ════════════════════════════════════════
+// Aspect Ratio
+// ════════════════════════════════════════
+
+test "yoga: aspect_ratio_width_defined" {
+  // width=100, aspect_ratio=2.0 → height = 100/2 = 50
+  let c = lay.leaf(100.0, UNDEF) |> lay.with_aspect_ratio(2.0)
+  let root = lay.col([c]) |> lay.with_size(200.0, 200.0)
+  let r = lay.layout(root, 200.0, 200.0)
+  assert(approx(r[1].w, 100.0))
+  assert(approx(r[1].h, 50.0))
+}
+
+test "yoga: aspect_ratio_height_defined" {
+  // height=60, aspect_ratio=1.5 → width = 60 * 1.5 = 90
+  let c = lay.leaf(UNDEF, 60.0) |> lay.with_aspect_ratio(1.5)
+  let root = lay.row([c]) |> lay.with_size(200.0, 200.0)
+  let r = lay.layout(root, 200.0, 200.0)
+  assert(approx(r[1].w, 90.0))
+  assert(approx(r[1].h, 60.0))
+}
+
+test "yoga: aspect_ratio_square" {
+  // aspect_ratio=1.0, width=80 → height=80
+  let c = lay.leaf(80.0, UNDEF) |> lay.with_aspect_ratio(1.0)
+  let root = lay.col([c]) |> lay.with_size(200.0, 200.0)
+  let r = lay.layout(root, 200.0, 200.0)
+  assert(approx(r[1].w, 80.0))
+  assert(approx(r[1].h, 80.0))
 }
 
 test "yoga: padding_percentage_asymmetric" {
