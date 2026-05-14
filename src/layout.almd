@@ -754,16 +754,17 @@ fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutR
       for i in 0..n_ch {
         let child = node.children[i]
         if child.position == POSITION_ABSOLUTE then {
-          // Resolve percentage sizes
-          let cw = if is_defined(child.width_pct) then inner_w * child.width_pct / 100.0
-                   else if is_defined(child.width) then child.width
-                   else inner_w
-          let ch = if is_defined(child.height_pct) then inner_h * child.height_pct / 100.0
-                   else if is_defined(child.height) then child.height
-                   else inner_h
-          let cs = compute_size(child, cw, ch)
-          let aw = clamp_dim(cs.w, child.min_width, child.max_width)
-          let ah = clamp_dim(cs.h, child.min_height, child.max_height)
+          // Resolve percentage sizes → these ARE the allocated dimensions
+          let aw = clamp_dim(
+            if is_defined(child.width_pct) then inner_w * child.width_pct / 100.0
+            else if is_defined(child.width) then child.width
+            else { let cs = compute_size(child, inner_w, inner_h); cs.w },
+            child.min_width, child.max_width)
+          let ah = clamp_dim(
+            if is_defined(child.height_pct) then inner_h * child.height_pct / 100.0
+            else if is_defined(child.height) then child.height
+            else { let cs = compute_size(child, inner_w, inner_h); cs.h },
+            child.min_height, child.max_height)
 
           // Position: top/left take priority, then bottom/right
           let ax = if is_defined(child.pos_left) then x + inset_left + child.pos_left
