@@ -1,0 +1,667 @@
+// ceangal layout engine — Yoga-aligned Flexbox
+//
+// CSS Flexbox §9 algorithm (single-line + wrap), Yoga-compatible.
+// Output: flat pre-order list of LayoutRect for snaidhm rendering.
+//
+// Differences from CSS defaults:
+//   flex-shrink defaults to 0 (not 1) — no surprise shrinking
+//   min-width/height defaults to 0 (not auto) — no overflow surprises
+
+import math
+
+// ── Enums ──
+
+let ROW = 0
+let COLUMN = 1
+let ROW_REVERSE = 2
+let COLUMN_REVERSE = 3
+
+let JUSTIFY_START = 0
+let JUSTIFY_END = 1
+let JUSTIFY_CENTER = 2
+let JUSTIFY_BETWEEN = 3
+let JUSTIFY_AROUND = 4
+let JUSTIFY_EVENLY = 5
+
+let ALIGN_START = 0
+let ALIGN_END = 1
+let ALIGN_CENTER = 2
+let ALIGN_STRETCH = 3
+
+let WRAP_NONE = 0
+let WRAP_WRAP = 1
+let WRAP_REVERSE = 2
+
+let DISPLAY_FLEX = 0
+let DISPLAY_NONE = 1
+
+// ── Edge values ──
+
+type Edges = { top: Float, right: Float, bottom: Float, left: Float }
+
+let edges_zero = { top: 0.0, right: 0.0, bottom: 0.0, left: 0.0 }
+
+fn edges_all(v: Float) -> Edges = { top: v, right: v, bottom: v, left: v }
+fn edges_xy(x: Float, y: Float) -> Edges = { top: y, right: x, bottom: y, left: x }
+fn edges_h(e: Edges) -> Float = e.left + e.right
+fn edges_v(e: Edges) -> Float = e.top + e.bottom
+
+// ── Size / Undefined ──
+
+let UNDEFINED = -1.0
+fn is_defined(v: Float) -> Bool = v >= 0.0
+
+type Size = { w: Float, h: Float }
+
+// ── Node ──
+
+type Node = {
+  direction: Int,        // ROW | COLUMN | ROW_REVERSE | COLUMN_REVERSE
+  wrap: Int,             // WRAP_NONE | WRAP_WRAP | WRAP_REVERSE
+  justify: Int,          // JUSTIFY_*
+  align_items: Int,      // ALIGN_* (default for children cross-axis)
+  align_content: Int,    // ALIGN_* (multi-line cross-axis distribution)
+  gap_main: Float,       // main axis gap
+  gap_cross: Float,      // cross axis gap (between wrap lines)
+
+  grow: Float,
+  shrink: Float,         // default 0 (not CSS's 1)
+  basis: Float,          // UNDEFINED = auto
+  align_self: Int,       // -1 = inherit from parent's align_items
+
+  padding: Edges,
+  margin: Edges,
+
+  width: Float,
+  height: Float,
+  min_width: Float,      // default 0
+  min_height: Float,
+  max_width: Float,      // UNDEFINED = no limit
+  max_height: Float,
+
+  display: Int,          // DISPLAY_FLEX | DISPLAY_NONE
+
+  children: List[Node],
+}
+
+// ── Layout result ──
+
+type LayoutRect = { x: Float, y: Float, w: Float, h: Float }
+
+// ── Node constructors ──
+
+fn node_defaults() -> Node = {
+  direction: ROW, wrap: WRAP_NONE,
+  justify: JUSTIFY_START, align_items: ALIGN_STRETCH, align_content: ALIGN_STRETCH,
+  gap_main: 0.0, gap_cross: 0.0,
+  grow: 0.0, shrink: 0.0, basis: UNDEFINED, align_self: -1,
+  padding: edges_zero, margin: edges_zero,
+  width: UNDEFINED, height: UNDEFINED,
+  min_width: 0.0, min_height: 0.0, max_width: UNDEFINED, max_height: UNDEFINED,
+  display: DISPLAY_FLEX, children: [],
+}
+
+// Copy all fields, replacing only what differs — helper macro pattern
+fn copy_node(n: Node) -> Node = {
+  direction: n.direction, wrap: n.wrap,
+  justify: n.justify, align_items: n.align_items, align_content: n.align_content,
+  gap_main: n.gap_main, gap_cross: n.gap_cross,
+  grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
+  padding: n.padding, margin: n.margin,
+  width: n.width, height: n.height,
+  min_width: n.min_width, min_height: n.min_height,
+  max_width: n.max_width, max_height: n.max_height,
+  display: n.display, children: n.children,
+}
+
+fn row(children: List[Node]) -> Node = {
+  let n = node_defaults()
+  { direction: ROW, wrap: n.wrap, justify: n.justify, align_items: n.align_items,
+    align_content: n.align_content, gap_main: n.gap_main, gap_cross: n.gap_cross,
+    grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
+    padding: n.padding, margin: n.margin, width: n.width, height: n.height,
+    min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
+    display: n.display, children: children }
+}
+
+fn col(children: List[Node]) -> Node = {
+  let n = node_defaults()
+  { direction: COLUMN, wrap: n.wrap, justify: n.justify, align_items: n.align_items,
+    align_content: n.align_content, gap_main: n.gap_main, gap_cross: n.gap_cross,
+    grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
+    padding: n.padding, margin: n.margin, width: n.width, height: n.height,
+    min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
+    display: n.display, children: children }
+}
+
+fn leaf(w: Float, h: Float) -> Node = {
+  let n = node_defaults()
+  { direction: n.direction, wrap: n.wrap, justify: n.justify, align_items: n.align_items,
+    align_content: n.align_content, gap_main: n.gap_main, gap_cross: n.gap_cross,
+    grow: n.grow, shrink: n.shrink, basis: n.basis, align_self: n.align_self,
+    padding: n.padding, margin: n.margin, width: w, height: h,
+    min_width: n.min_width, min_height: n.min_height, max_width: n.max_width, max_height: n.max_height,
+    display: n.display, children: [] }
+}
+
+// ── Builders ──
+
+fn set_field(n: Node, dir: Int, wrap: Int, just: Int, ai: Int, ac: Int,
+             gm: Float, gc: Float, gr: Float, sh: Float, bas: Float, as_: Int,
+             pad: Edges, mar: Edges, w: Float, h: Float,
+             mnw: Float, mnh: Float, mxw: Float, mxh: Float,
+             disp: Int, ch: List[Node]) -> Node =
+  { direction: dir, wrap: wrap, justify: just, align_items: ai, align_content: ac,
+    gap_main: gm, gap_cross: gc, grow: gr, shrink: sh, basis: bas, align_self: as_,
+    padding: pad, margin: mar, width: w, height: h,
+    min_width: mnw, min_height: mnh, max_width: mxw, max_height: mxh,
+    display: disp, children: ch }
+
+fn with_gap(n: Node, v: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    v, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_gaps(n: Node, main: Float, cross: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    main, cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_padding(n: Node, e: Edges) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    e, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_margin(n: Node, e: Edges) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, e, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_justify(n: Node, v: Int) -> Node =
+  set_field(n, n.direction, n.wrap, v, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_align(n: Node, v: Int) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, v, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_align_content(n: Node, v: Int) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, v,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_grow(n: Node, v: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, v, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_shrink(n: Node, v: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, v, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_flex(n: Node, gr: Float, sh: Float, bas: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, gr, sh, bas, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_basis(n: Node, v: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, v, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_size(n: Node, w: Float, h: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, w, h, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_min_size(n: Node, w: Float, h: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, w, h, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_max_size(n: Node, w: Float, h: Float) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, w, h,
+    n.display, n.children)
+
+fn with_align_self(n: Node, v: Int) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, v,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_wrap(n: Node, v: Int) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    n.display, n.children)
+
+fn with_display(n: Node, v: Int) -> Node =
+  set_field(n, n.direction, n.wrap, n.justify, n.align_items, n.align_content,
+    n.gap_main, n.gap_cross, n.grow, n.shrink, n.basis, n.align_self,
+    n.padding, n.margin, n.width, n.height, n.min_width, n.min_height, n.max_width, n.max_height,
+    v, n.children)
+
+// ── Constraint helpers ──
+
+fn clamp_dim(v: Float, lo: Float, hi: Float) -> Float = {
+  let r = float.max(v, lo)
+  if is_defined(hi) then float.min(r, hi) else r
+}
+
+// ── Main / cross axis abstraction ──
+
+fn is_row(dir: Int) -> Bool = dir == ROW or dir == ROW_REVERSE
+
+fn main_of(s: Size, dir: Int) -> Float = if is_row(dir) then s.w else s.h
+fn cross_of(s: Size, dir: Int) -> Float = if is_row(dir) then s.h else s.w
+fn make_size(main: Float, cross: Float, dir: Int) -> Size =
+  if is_row(dir) then { w: main, h: cross } else { w: cross, h: main }
+
+fn node_main(n: Node) -> Float = if is_row(n.direction) then n.width else n.height
+fn node_cross(n: Node) -> Float = if is_row(n.direction) then n.height else n.width
+fn node_main_min(n: Node) -> Float = if is_row(n.direction) then n.min_width else n.min_height
+fn node_main_max(n: Node) -> Float = if is_row(n.direction) then n.max_width else n.max_height
+fn node_cross_min(n: Node) -> Float = if is_row(n.direction) then n.min_height else n.min_width
+fn node_cross_max(n: Node) -> Float = if is_row(n.direction) then n.max_height else n.max_width
+
+fn pad_main(n: Node) -> Float =
+  if is_row(n.direction) then edges_h(n.padding) else edges_v(n.padding)
+fn pad_cross(n: Node) -> Float =
+  if is_row(n.direction) then edges_v(n.padding) else edges_h(n.padding)
+
+fn mar_main(c: Node, dir: Int) -> Float =
+  if is_row(dir) then edges_h(c.margin) else edges_v(c.margin)
+fn mar_cross(c: Node, dir: Int) -> Float =
+  if is_row(dir) then edges_v(c.margin) else edges_h(c.margin)
+
+fn mar_main_start(c: Node, dir: Int) -> Float =
+  if dir == ROW then c.margin.left
+  else if dir == ROW_REVERSE then c.margin.right
+  else if dir == COLUMN then c.margin.top
+  else c.margin.bottom
+
+fn mar_main_end(c: Node, dir: Int) -> Float =
+  if dir == ROW then c.margin.right
+  else if dir == ROW_REVERSE then c.margin.left
+  else if dir == COLUMN then c.margin.bottom
+  else c.margin.top
+
+fn mar_cross_start(c: Node, dir: Int) -> Float =
+  if is_row(dir) then c.margin.top else c.margin.left
+fn mar_cross_end(c: Node, dir: Int) -> Float =
+  if is_row(dir) then c.margin.bottom else c.margin.right
+
+fn pad_start(n: Node) -> { mx: Float, cx: Float } =
+  if is_row(n.direction) then { mx: n.padding.left, cx: n.padding.top }
+  else { mx: n.padding.top, cx: n.padding.left }
+
+// ── Flex line (for wrap support) ──
+
+type FlexItem = {
+  idx: Int,           // child index
+  basis: Float,       // resolved flex-basis
+  main: Float,        // resolved main size after flex
+  cross: Float,       // resolved cross size
+}
+
+type FlexLine = {
+  items: List[FlexItem],
+  main_used: Float,   // total main consumption (items + gaps + margins)
+  cross_size: Float,  // max cross size in this line
+}
+
+// ── Compute intrinsic size of a node ──
+
+fn compute_size(node: Node, avail_w: Float, avail_h: Float) -> Size = {
+  if node.display == DISPLAY_NONE then { w: 0.0, h: 0.0 }
+  else {
+    let dir = node.direction
+    let pm = pad_main(node)
+    let pc = pad_cross(node)
+    let am = if is_row(dir) then avail_w else avail_h
+    let ac = if is_row(dir) then avail_h else avail_w
+
+    let n_ch = list.len(node.children)
+    if n_ch == 0 then {
+      let w = if is_defined(node.width) then node.width
+              else if is_defined(avail_w) then avail_w else 0.0
+      let h = if is_defined(node.height) then node.height
+              else if is_defined(avail_h) then avail_h else 0.0
+      { w: clamp_dim(w, node.min_width, node.max_width),
+        h: clamp_dim(h, node.min_height, node.max_height) }
+    } else {
+      let inner_m = if is_defined(am) then am - pm else UNDEFINED
+
+      // Collect bases
+      var bases: List[Float] = []
+      var total_basis = 0.0
+      var total_grow = 0.0
+      var total_shrink_scaled = 0.0
+      var visible = 0
+      for child in node.children {
+        if child.display == DISPLAY_NONE then {
+          bases = bases + [0.0]
+        } else {
+          let b = if is_defined(child.basis) then child.basis
+                  else {
+                    let caw = if is_row(dir) then inner_m else (if is_defined(ac) then ac - pc - mar_cross(child, dir) else UNDEFINED)
+                    let cah = if is_row(dir) then (if is_defined(ac) then ac - pc - mar_cross(child, dir) else UNDEFINED) else inner_m
+                    let cs = compute_size(child, caw, cah)
+                    main_of(cs, dir)
+                  }
+          bases = bases + [b]
+          total_basis = total_basis + b + mar_main(child, dir)
+          total_grow = total_grow + child.grow
+          total_shrink_scaled = total_shrink_scaled + child.shrink * b
+          visible = visible + 1
+        }
+      }
+
+      let gap_total = node.gap_main * int.to_float(int.max(0, visible - 1))
+      total_basis = total_basis + gap_total
+
+      let remaining = if is_defined(inner_m) then inner_m - total_basis else 0.0
+
+      // Resolve flex
+      var mains: List[Float] = []
+      var max_cross = 0.0
+      for i in 0..n_ch {
+        let child = node.children[i]
+        if child.display == DISPLAY_NONE then {
+          mains = mains + [0.0]
+        } else {
+          let b = bases[i]
+          let delta = if remaining > 0.0 and total_grow > 0.0 then
+                        remaining * child.grow / total_grow
+                      else if remaining < 0.0 and total_shrink_scaled > 0.0 and child.shrink > 0.0 then
+                        remaining * (child.shrink * b) / total_shrink_scaled
+                      else 0.0
+          let m = clamp_dim(float.max(0.0, b + delta),
+                    if is_row(dir) then child.min_width else child.min_height,
+                    if is_row(dir) then child.max_width else child.max_height)
+          mains = mains + [m]
+
+          let cca = if is_defined(ac) then ac - pc - mar_cross(child, dir) else UNDEFINED
+          let cs = compute_size(child,
+            if is_row(dir) then m else cca,
+            if is_row(dir) then cca else m)
+          max_cross = float.max(max_cross, cross_of(cs, dir) + mar_cross(child, dir))
+        }
+      }
+
+      let content_m = list.fold(mains, 0.0, (a, v) => a + v) + gap_total
+                      + list.fold(node.children, 0.0, (a, c) => a + (if c.display == DISPLAY_NONE then 0.0 else mar_main(c, dir)))
+      let rm = if is_defined(node_main(node)) then node_main(node)
+               else clamp_dim(content_m + pm, node_main_min(node), node_main_max(node))
+      let rc = if is_defined(node_cross(node)) then node_cross(node)
+               else clamp_dim(max_cross + pc, node_cross_min(node), node_cross_max(node))
+      make_size(rm, rc, dir)
+    }
+  }
+}
+
+// ── Build flex lines (wrap support) ──
+
+fn build_lines(node: Node, inner_main: Float) -> List[FlexLine] = {
+  let dir = node.direction
+  let n_ch = list.len(node.children)
+  let do_wrap = node.wrap != WRAP_NONE and is_defined(inner_main)
+
+  var lines: List[FlexLine] = []
+  var cur_items: List[FlexItem] = []
+  var cur_main = 0.0
+  var cur_cross = 0.0
+  var items_in_line = 0
+
+  for i in 0..n_ch {
+    let child = node.children[i]
+    if child.display == DISPLAY_NONE then () else {
+      let b = if is_defined(child.basis) then child.basis
+              else {
+                let cs = compute_size(child,
+                  if is_row(dir) then inner_main else UNDEFINED,
+                  if is_row(dir) then UNDEFINED else inner_main)
+                main_of(cs, dir)
+              }
+      let item_main = b + mar_main(child, dir)
+      let gap_before = if items_in_line > 0 then node.gap_main else 0.0
+
+      // Wrap: break if adding this item exceeds available main
+      if do_wrap and items_in_line > 0 and cur_main + gap_before + item_main > inner_main then {
+        lines = lines + [{ items: cur_items, main_used: cur_main, cross_size: cur_cross }]
+        cur_items = []
+        cur_main = 0.0
+        cur_cross = 0.0
+        items_in_line = 0
+      } else ()
+
+      if items_in_line > 0 then {
+        cur_main = cur_main + node.gap_main
+      } else ()
+
+      let cs = compute_size(child,
+        if is_row(dir) then b else UNDEFINED,
+        if is_row(dir) then UNDEFINED else b)
+      let cc = cross_of(cs, dir)
+
+      cur_items = cur_items + [{ idx: i, basis: b, main: b, cross: cc }]
+      cur_main = cur_main + item_main
+      cur_cross = float.max(cur_cross, cc + mar_cross(child, dir))
+      items_in_line = items_in_line + 1
+    }
+  }
+
+  if items_in_line > 0 then {
+    lines = lines + [{ items: cur_items, main_used: cur_main, cross_size: cur_cross }]
+  } else ()
+
+  lines
+}
+
+// ── Resolve flex within a single line ──
+
+fn resolve_line_flex(node: Node, line: FlexLine, inner_main: Float) -> FlexLine = {
+  let dir = node.direction
+  let n_items = list.len(line.items)
+  let gap_total = node.gap_main * int.to_float(int.max(0, n_items - 1))
+  let remaining = inner_main - line.main_used
+
+  var total_grow = 0.0
+  var total_shrink_scaled = 0.0
+  for item in line.items {
+    let child = node.children[item.idx]
+    total_grow = total_grow + child.grow
+    total_shrink_scaled = total_shrink_scaled + child.shrink * item.basis
+  }
+
+  var new_items: List[FlexItem] = []
+  var new_cross = 0.0
+  for item in line.items {
+    let child = node.children[item.idx]
+    let delta = if remaining > 0.0 and total_grow > 0.0 then
+                  remaining * child.grow / total_grow
+                else if remaining < 0.0 and total_shrink_scaled > 0.0 and child.shrink > 0.0 then
+                  remaining * (child.shrink * item.basis) / total_shrink_scaled
+                else 0.0
+    let m = clamp_dim(float.max(0.0, item.basis + delta),
+              if is_row(dir) then child.min_width else child.min_height,
+              if is_row(dir) then child.max_width else child.max_height)
+
+    // Recompute cross with final main
+    let cs = compute_size(child,
+      if is_row(dir) then m else UNDEFINED,
+      if is_row(dir) then UNDEFINED else m)
+    let cc = cross_of(cs, dir)
+
+    new_items = new_items + [{ idx: item.idx, basis: item.basis, main: m, cross: cc }]
+    new_cross = float.max(new_cross, cc + mar_cross(child, dir))
+  }
+
+  { items: new_items, main_used: line.main_used, cross_size: new_cross }
+}
+
+// ── Position items within a line, return LayoutRects ──
+
+fn layout_line(node: Node, line: FlexLine, inner_main: Float, inner_cross: Float,
+               origin_main: Float, origin_cross: Float, line_cross: Float) -> List[LayoutRect] = {
+  let dir = node.direction
+  let n_items = list.len(line.items)
+  let gap_total = node.gap_main * int.to_float(int.max(0, n_items - 1))
+
+  // Compute used main for justify
+  var used = gap_total
+  for item in line.items {
+    used = used + item.main + mar_main(node.children[item.idx], dir)
+  }
+  let free = float.max(0.0, inner_main - used)
+  let nf = int.to_float(n_items)
+
+  var off = 0.0
+  var spacing = node.gap_main
+  if node.justify == JUSTIFY_END then { off = free }
+  else if node.justify == JUSTIFY_CENTER then { off = free / 2.0 }
+  else if node.justify == JUSTIFY_BETWEEN then {
+    spacing = if n_items > 1 then node.gap_main + free / int.to_float(n_items - 1) else node.gap_main
+  } else if node.justify == JUSTIFY_AROUND then {
+    let s = free / nf
+    off = s / 2.0
+    spacing = node.gap_main + s
+  } else if node.justify == JUSTIFY_EVENLY then {
+    let s = free / (nf + 1.0)
+    off = s
+    spacing = node.gap_main + s
+  } else ()
+
+  var cursor = off
+  var rects: List[LayoutRect] = []
+  for ii in 0..n_items {
+    let item = line.items[ii]
+    let child = node.children[item.idx]
+    let ms = mar_main_start(child, dir)
+    let me = mar_main_end(child, dir)
+    cursor = cursor + ms
+
+    let ea = if child.align_self >= 0 then child.align_self else node.align_items
+    let cs_start = mar_cross_start(child, dir)
+    let cs_end = mar_cross_end(child, dir)
+    let cross_avail = line_cross - cs_start - cs_end
+    let child_cross = if ea == ALIGN_STRETCH then cross_avail else item.cross
+    let cross_free = cross_avail - child_cross
+
+    let co = if ea == ALIGN_END then cs_start + cross_free
+             else if ea == ALIGN_CENTER then cs_start + cross_free / 2.0
+             else cs_start
+
+    let cx = if is_row(dir) then origin_main + cursor else origin_cross + co
+    let cy = if is_row(dir) then origin_cross + co else origin_main + cursor
+    let cw = if is_row(dir) then item.main else child_cross
+    let ch = if is_row(dir) then child_cross else item.main
+
+    let sub = do_layout(child, cx, cy, cw, ch)
+    rects = rects + sub
+
+    cursor = cursor + item.main + me + spacing
+  }
+  rects
+}
+
+// ── Core recursive layout ──
+
+fn do_layout(node: Node, x: Float, y: Float, w: Float, h: Float) -> List[LayoutRect] = {
+  if node.display == DISPLAY_NONE then []
+  else {
+    let self_rect = { x: x, y: y, w: w, h: h }
+    let n_ch = list.len(node.children)
+    if n_ch == 0 then [self_rect]
+    else {
+      let dir = node.direction
+      let ps = pad_start(node)
+      let inner_w = w - edges_h(node.padding)
+      let inner_h = h - edges_v(node.padding)
+      let inner_main = if is_row(dir) then inner_w else inner_h
+      let inner_cross = if is_row(dir) then inner_h else inner_w
+      let origin_main = if is_row(dir) then x + node.padding.left else y + node.padding.top
+      let origin_cross = if is_row(dir) then y + node.padding.top else x + node.padding.left
+
+      // Build and resolve flex lines
+      let raw_lines = build_lines(node, inner_main)
+      var lines: List[FlexLine] = []
+      for rl in raw_lines {
+        lines = lines + [resolve_line_flex(node, rl, inner_main)]
+      }
+
+      let n_lines = list.len(lines)
+
+      if n_lines == 0 then [self_rect]
+      else if n_lines == 1 then {
+        let rects = layout_line(node, lines[0], inner_main, inner_cross,
+                                origin_main, origin_cross, inner_cross)
+        [self_rect] + rects
+      } else {
+        // Multi-line: distribute cross space via align-content
+        var total_line_cross = 0.0
+        for ln in lines { total_line_cross = total_line_cross + ln.cross_size }
+        let cross_gaps = node.gap_cross * int.to_float(n_lines - 1)
+        let free_cross = float.max(0.0, inner_cross - total_line_cross - cross_gaps)
+        let nlf = int.to_float(n_lines)
+
+        var line_offset = 0.0
+        var line_spacing = node.gap_cross
+        var line_stretch = 0.0
+        if node.align_content == ALIGN_END then { line_offset = free_cross }
+        else if node.align_content == ALIGN_CENTER then { line_offset = free_cross / 2.0 }
+        else if node.align_content == ALIGN_STRETCH then {
+          line_stretch = free_cross / nlf
+        } else if node.align_content == JUSTIFY_BETWEEN then {
+          line_spacing = if n_lines > 1 then node.gap_cross + free_cross / int.to_float(n_lines - 1) else node.gap_cross
+        } else if node.align_content == JUSTIFY_AROUND then {
+          let s = free_cross / nlf
+          line_offset = s / 2.0
+          line_spacing = node.gap_cross + s
+        } else if node.align_content == JUSTIFY_EVENLY then {
+          let s = free_cross / (nlf + 1.0)
+          line_offset = s
+          line_spacing = node.gap_cross + s
+        } else ()  // ALIGN_START
+
+        var cursor_cross = line_offset
+        var all_rects: List[LayoutRect] = []
+        for li in 0..n_lines {
+          let ln = lines[li]
+          let lc = ln.cross_size + line_stretch
+          let oc = origin_cross + cursor_cross
+          let rects = layout_line(node, ln, inner_main, inner_cross, origin_main, oc, lc)
+          all_rects = all_rects + rects
+          cursor_cross = cursor_cross + lc + line_spacing
+        }
+
+        [self_rect] + all_rects
+      }
+    }
+  }
+}
+
+// ── Public API ──
+
+fn layout(root: Node, viewport_w: Float, viewport_h: Float) -> List[LayoutRect] = {
+  let size = compute_size(root, viewport_w, viewport_h)
+  do_layout(root, 0.0, 0.0, size.w, size.h)
+}
