@@ -1,40 +1,37 @@
-// ceangal runtime — DOM + GPU + font WASM import implementations
+// ceangal runtime — WASM host for DOM + GPU + font imports
 //
-// Single WASM binary (ceangal + snaidhm compiled together).
-// This runtime provides all three import namespaces: dom, gpu, font.
+// Thin bridge: all scroll physics + scrollbar state live in WASM (Almide).
+// JS handles: event dispatch, rAF loop, WebGPU context, resource loading.
 
 import { TTFFont } from "./ttf.js";
 import { generateSDFAtlas } from "./sdf.js";
 
+// ── Handle table (GPU objects = opaque ints in WASM) ──
+
 const handles = [null];
-function h(obj) { handles.push(obj); return handles.length - 1; }
-function g(id) { return handles[Number(id)]; }
+const h = (obj) => { handles.push(obj); return handles.length - 1; };
+const g = (id) => handles[Number(id)];
 const B = (n) => BigInt(n);
 const N = (b) => Number(b);
 
 let _device, _context, _format, _wasmMemory;
 let _font = null, _atlas = null;
 
-// DOM string table
 const strings = [];
 let strBuf = [];
-
-// GPU streaming data
 let _dataChunks = [];
 let _dataIsF32 = [];
 let _bindingEntries = [];
-
 let SHADERS = [];
 
-// ── DOM imports ──
+// ── WASM import namespaces ──
 
 function createDomImports() {
   return {
     begin_str() { strBuf = []; },
     push_byte(b) { strBuf.push(N(b)); },
     commit_str() {
-      const s = new TextDecoder().decode(new Uint8Array(strBuf));
-      strings.push(s);
+      strings.push(new TextDecoder().decode(new Uint8Array(strBuf)));
       return B(strings.length - 1);
     },
     create_element(tagId) { return B(h(document.createElement(strings[N(tagId)]))); },
@@ -47,8 +44,6 @@ function createDomImports() {
     log(strId) { console.log("[ceangal]", strings[N(strId)]); },
   };
 }
-
-// ── GPU imports (from snaidhm) ──
 
 function createGpuImports(canvas) {
   return {
@@ -66,6 +61,9 @@ function createGpuImports(canvas) {
     },
     write_buffer(deviceId, bufferId, dataPtr, dataLen) {
       g(deviceId).queue.writeBuffer(g(bufferId), 0, new Uint8Array(_wasmMemory.buffer, N(dataPtr), N(dataLen)));
+    },
+    write_f32_at(deviceId, bufferId, byteOffset, value) {
+      g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), new Float32Array([value]));
     },
     create_compute_pipeline(deviceId, shaderId, _) {
       return B(h(g(deviceId).createComputePipeline({ layout: "auto", compute: { module: g(shaderId), entryPoint: "fine" } })));
@@ -151,151 +149,27 @@ function createGpuImports(canvas) {
       g(deviceId).queue.writeBuffer(g(bufferId), 0, new Uint8Array(buf));
       _dataChunks = []; _dataIsF32 = [];
     },
-    write_f32_at(deviceId, bufferId, byteOffset, value) {
-      const buf = new Float32Array([value]);
-      g(deviceId).queue.writeBuffer(g(bufferId), N(byteOffset), buf);
-    },
     log_int(v) { console.log("[gpu]", N(v)); },
     log_str(ptr, len) { console.log("[gpu]", new TextDecoder().decode(new Uint8Array(_wasmMemory.buffer, N(ptr), N(len)))); },
   };
 }
 
-// ── Font imports ──
-
-function _glyph(ch) { return _atlas.glyphs.get(String.fromCharCode(N(ch))); }
-
-function createFontImports() {
+function createFontImports(fontBuffer) {
+  const view = new DataView(fontBuffer);
   return {
-    units_per_em: () => B(_font.unitsPerEm),
-    atlas_width: () => B(_atlas.atlasWidth),
-    atlas_height: () => B(_atlas.atlasHeight),
-    glyph_advance(ch) { const g = _glyph(ch); return g ? g.advance : _font.unitsPerEm * 0.3; },
-    glyph_has_sdf(ch) { const g = _glyph(ch); return B(g && g.atlasW > 0 ? 1 : 0); },
-    glyph_atlas_x(ch) { const g = _glyph(ch); return B(g ? g.atlasX : 0); },
-    glyph_atlas_y(ch) { const g = _glyph(ch); return B(g ? g.atlasY : 0); },
-    glyph_atlas_w(ch) { const g = _glyph(ch); return B(g ? g.atlasW : 0); },
-    glyph_atlas_h(ch) { const g = _glyph(ch); return B(g ? g.atlasH : 0); },
-    glyph_sdf_scale(ch) { const g = _glyph(ch); return g ? g.sdfScale : 1.0; },
-    glyph_padding(ch) { const g = _glyph(ch); return B(g ? g.padding : 0); },
-    glyph_xmin(ch) { const g = _glyph(ch); return g ? g.bounds.xMin : 0.0; },
-    glyph_ymin(ch) { const g = _glyph(ch); return g ? g.bounds.yMin : 0.0; },
-    glyph_xmax(ch) { const g = _glyph(ch); return g ? g.bounds.xMax : 0.0; },
-    glyph_ymax(ch) { const g = _glyph(ch); return g ? g.bounds.yMax : 0.0; },
+    len: () => B(fontBuffer.byteLength),
+    u8: (offset) => B(view.getUint8(N(offset))),
+    u16be: (offset) => B(view.getUint16(N(offset))),
+    i16be: (offset) => B(view.getInt16(N(offset))),
+    u32be: (offset) => B(view.getUint32(N(offset))),
+    i8: (offset) => B(view.getInt8(N(offset))),
   };
 }
 
-// ── Image resources ──
-
-function generateCardImages() {
-  const S = 64;
-  const atlas = new Uint8Array(S * 3 * S * 4);
-  for (let img = 0; img < 3; img++) {
-    for (let y = 0; y < S; y++) {
-      for (let x = 0; x < S; x++) {
-        const i = (y * S * 3 + img * S + x) * 4;
-        const u = x / S, v = y / S;
-        let r, g, b;
-        if (img === 0) { const dx=u-0.5,dy=v-0.35,sun=Math.max(0,1-Math.sqrt(dx*dx+dy*dy)*4.5); r=0.92-v*0.35+sun*0.4; g=0.35+sun*0.55-v*0.15; b=0.25+v*0.45; }
-        else if (img === 1) { const w=Math.sin(u*12+v*4)*0.04; r=0.1+v*0.15; g=0.35+u*0.2+w; b=0.55+v*0.25+w; }
-        else { const bd=Math.sin(v*8+u*3)*0.1; r=0.25+v*0.35+bd; g=0.15+(1-v)*0.4+bd*0.5; b=0.4+v*0.25; }
-        atlas[i]=Math.min(255,Math.max(0,r*255)); atlas[i+1]=Math.min(255,Math.max(0,g*255)); atlas[i+2]=Math.min(255,Math.max(0,b*255)); atlas[i+3]=255;
-      }
-    }
-  }
-  return { data: atlas, width: S * 3, height: S };
-}
-
-function buildImageQuads() {
-  const cards = [
-    { x: -0.81, y: -0.81, w: 0.40, h: 0.30, uOff: 0 },
-    { x: -0.26, y: -0.81, w: 0.40, h: 0.30, uOff: 1/3 },
-    { x:  0.29, y: -0.81, w: 0.48, h: 0.30, uOff: 2/3 },
-  ];
-  const verts = [], idxs = [];
-  for (const c of cards) {
-    const vi = verts.length / 4;
-    const u0 = c.uOff, u1 = c.uOff + 1/3;
-    verts.push(c.x,c.y,u0,1, c.x+c.w,c.y,u1,1, c.x+c.w,c.y+c.h,u1,0, c.x,c.y+c.h,u0,0);
-    idxs.push(vi,vi+1,vi+2,vi,vi+2,vi+3);
-  }
-  return { vertices: new Float32Array(verts), indices: new Uint32Array(idxs) };
-}
-
-// ── Text input (JS-side) ──
-
-// Persistent textarea state (survives resize rebuilds)
-let _textareaListenersAttached = false;
-
-function setupTextInput(overlay, textarea, containerW, exports) {
-  const left = exports.textarea_x ? Number(exports.textarea_x(B(containerW), B(containerW))) : 344;
-  const top = exports.textarea_y ? Number(exports.textarea_y(B(containerW), B(containerW))) : 316;
-  const width = exports.textarea_w ? Number(exports.textarea_w(B(containerW), B(containerW))) : 132;
-  const scale = containerW / 512;
-  const fontSize = 11 * scale;
-
-  const inputArea = document.createElement("div");
-  inputArea.className = "input-area";
-  inputArea.setAttribute("role", "textbox");
-  inputArea.setAttribute("aria-label", "Text input field");
-  Object.assign(inputArea.style, { left: left+"px", top: top+"px", width: width+"px", fontSize: fontSize+"px", fontFamily: "sans-serif" });
-
-  const display = document.createElement("div");
-  display.className = "input-display";
-  inputArea.appendChild(display);
-  overlay.appendChild(inputArea);
-
-  overlay.appendChild(textarea);
-  Object.assign(textarea.style, { left: left+"px", top: top+"px", width: width+"px", height: "1.4em", fontSize: fontSize+"px" });
-
-  // Show current state (text or placeholder)
-  const isFocused = document.activeElement === textarea;
-  display.innerHTML = "";
-  if (textarea.value && !isFocused) {
-    display.appendChild(document.createTextNode(textarea.value));
-  } else if (!textarea.value && !isFocused) {
-    const ph = document.createElement("span"); ph.className = "placeholder"; ph.textContent = "Type here...";
-    display.appendChild(ph);
-  }
-
-  // Attach event listeners only once
-  if (!_textareaListenersAttached) {
-    _textareaListenersAttached = true;
-
-    function getDisplay() { return overlay.querySelector(".input-display"); }
-    function getInputArea() { return overlay.querySelector(".input-area"); }
-
-    function renderContent() {
-      const d = getDisplay(); if (!d) return;
-      d.innerHTML = "";
-      if (document.activeElement !== textarea && textarea.value === "") {
-        const ph = document.createElement("span"); ph.className = "placeholder"; ph.textContent = "Type here...";
-        d.appendChild(ph);
-      }
-    }
-
-    inputArea.addEventListener("click", () => { textarea.style.pointerEvents = "auto"; textarea.focus(); });
-    textarea.addEventListener("focus", () => {
-      textarea.style.color = "#333"; textarea.style.caretColor = "#333";
-      const ia = getInputArea(); if (ia) { ia.style.outline = "1.5px solid rgba(66,133,244,0.6)"; ia.style.outlineOffset = "2px"; ia.style.borderRadius = "2px"; }
-      renderContent();
-    });
-    textarea.addEventListener("blur", () => {
-      textarea.style.color = "transparent"; textarea.style.caretColor = "transparent"; textarea.style.pointerEvents = "none";
-      const ia = getInputArea(); if (ia) ia.style.outline = "none";
-      const d = getDisplay(); if (d) { d.innerHTML = ""; if (textarea.value) d.appendChild(document.createTextNode(textarea.value)); else renderContent(); }
-    });
-    textarea.addEventListener("input", renderContent);
-  }
-}
-
-// ── Scroll animation loop (thin bridge to WASM scroll physics) ──
+// ── Scroll animator (rAF bridge — physics lives in WASM) ──
 
 class ScrollAnimator {
-  constructor() {
-    this._raf = null;
-    this._lastTime = 0;
-    this._tickFn = null; // (dt) => running:bool
-  }
+  constructor() { this._raf = null; this._lastTime = 0; this._tickFn = null; }
 
   kick() {
     if (this._raf !== null) return;
@@ -303,8 +177,7 @@ class ScrollAnimator {
     const loop = (now) => {
       const dt = (now - this._lastTime) / 1000;
       this._lastTime = now;
-      const running = this._tickFn ? this._tickFn(dt) : false;
-      if (running) {
+      if (this._tickFn?.(dt)) {
         this._raf = requestAnimationFrame(loop);
       } else {
         this._raf = null;
@@ -314,10 +187,7 @@ class ScrollAnimator {
   }
 
   stop() {
-    if (this._raf !== null) {
-      cancelAnimationFrame(this._raf);
-      this._raf = null;
-    }
+    if (this._raf !== null) { cancelAnimationFrame(this._raf); this._raf = null; }
   }
 }
 
@@ -330,7 +200,6 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   _device = await adapter.requestDevice();
   _format = navigator.gpu.getPreferredCanvasFormat();
 
-  // Load shaders + font in parallel
   const [rasterCode, textCode, imageCode, fontBuffer] = await Promise.all([
     fetch("./raster.wgsl?v=" + Date.now()).then(r => r.text()),
     fetch("./text.wgsl?v=" + Date.now()).then(r => r.text()),
@@ -339,180 +208,161 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   ]);
   SHADERS = [rasterCode, rasterCode, textCode, imageCode];
 
-  // Font + SDF atlas
   _font = new TTFFont(fontBuffer);
-  const chars = [];
-  for (let i = 32; i < 127; i++) chars.push(String.fromCharCode(i));
+  const chars = []; for (let i = 32; i < 127; i++) chars.push(String.fromCharCode(i));
   _atlas = generateSDFAtlas(_font, chars, 48, 6);
 
-  // SDF texture
-  const sdfTexture = _device.createTexture({ size: [_atlas.atlasWidth, _atlas.atlasHeight], format: "r8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
-  const bpr = Math.ceil(_atlas.atlasWidth / 256) * 256;
-  const aligned = new Uint8Array(bpr * _atlas.atlasHeight);
-  for (let row = 0; row < _atlas.atlasHeight; row++) aligned.set(_atlas.atlasData.subarray(row * _atlas.atlasWidth, (row + 1) * _atlas.atlasWidth), row * bpr);
-  _device.queue.writeTexture({ texture: sdfTexture }, aligned, { bytesPerRow: bpr }, [_atlas.atlasWidth, _atlas.atlasHeight]);
-  const sdfSampler = _device.createSampler({ magFilter: "linear", minFilter: "linear" });
-
-  // Image resources
-  const cardImages = generateCardImages();
-  const imageQuads = buildImageQuads();
-  const imgTexture = _device.createTexture({ size: [cardImages.width, cardImages.height], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
-  const ibpr = Math.ceil(cardImages.width * 4 / 256) * 256;
-  const ialigned = new Uint8Array(ibpr * cardImages.height);
-  for (let row = 0; row < cardImages.height; row++) ialigned.set(cardImages.data.subarray(row * cardImages.width * 4, (row + 1) * cardImages.width * 4), row * ibpr);
-  _device.queue.writeTexture({ texture: imgTexture }, ialigned, { bytesPerRow: ibpr }, [cardImages.width, cardImages.height]);
-  const imgSampler = _device.createSampler({ magFilter: "linear", minFilter: "linear" });
-  const imgVertBuf = _device.createBuffer({ size: imageQuads.vertices.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-  _device.queue.writeBuffer(imgVertBuf, 0, imageQuads.vertices);
-  const imgIdxBuf = _device.createBuffer({ size: imageQuads.indices.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
-  _device.queue.writeBuffer(imgIdxBuf, 0, imageQuads.indices);
-
-  console.log(`SDF atlas: ${_atlas.atlasWidth}x${_atlas.atlasHeight} | Images: ${imageQuads.indices.length / 6}`);
+  // Image resources (demo)
+  const imgTex = _device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  _device.queue.writeTexture({ texture: imgTex }, new Uint8Array([0,0,0,0]), { bytesPerRow: 4 }, [1,1]);
+  const imgSamp = _device.createSampler({ magFilter: "linear", minFilter: "linear" });
+  const imgVtx = _device.createBuffer({ size: 16, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+  const imgIdx = _device.createBuffer({ size: 4, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
 
   // WASM
-  const wasi = new Proxy({}, { get(_, n) { if (n === "proc_exit") return () => {}; if (n === "fd_prestat_get") return () => 8; return () => 0; }});
-  // Font data byte-level access (Almide TTF parser reads raw bytes)
-  const fontDataView = new DataView(fontBuffer);
-  const fontDataImports = {
-    len: () => B(fontBuffer.byteLength),
-    u8: (offset) => B(fontDataView.getUint8(Number(offset))),
-    u16be: (offset) => B(fontDataView.getUint16(Number(offset))),
-    i16be: (offset) => B(fontDataView.getInt16(Number(offset))),
-    u32be: (offset) => B(fontDataView.getUint32(Number(offset))),
-    i8: (offset) => B(fontDataView.getInt8(Number(offset))),
+  const wasi = new Proxy({}, { get: () => () => 0 });
+  const imports = {
+    wasi_snapshot_preview1: wasi,
+    dom: createDomImports(),
+    gpu: createGpuImports(canvas),
+    font_data: createFontImports(fontBuffer),
   };
-  const imports = { wasi_snapshot_preview1: wasi, dom: createDomImports(), gpu: createGpuImports(canvas), font_data: fontDataImports };
   const { instance } = await WebAssembly.instantiate(await fetch(wasmUrl).then(r => r.arrayBuffer()), imports);
   _wasmMemory = instance.exports.memory;
-
   if (instance.exports._start) try { instance.exports._start(); } catch (_) {}
 
+  const ex = instance.exports;
   const container = canvas.parentElement;
-  const imgHandles = { vtx: h(imgVertBuf), idx: h(imgIdxBuf), count: imageQuads.indices.length, tex: h(imgTexture), samp: h(imgSampler) };
-
+  const img = { vtx: h(imgVtx), idx: h(imgIdx), tex: h(imgTex), samp: h(imgSamp) };
   const animator = new ScrollAnimator();
 
-  function prepareScene() {
-    const cw = container.clientWidth;
-    const ch = container.clientHeight;
+  animator._tickFn = (dt) => ex.scroll_tick ? N(ex.scroll_tick(dt)) === 1 : false;
+
+  // ── Scene lifecycle ──
+
+  function prepare() {
+    const cw = container.clientWidth, ch = container.clientHeight;
     const dpr = window.devicePixelRatio || 1;
     const pw = Math.floor(cw * dpr / 16) * 16;
     const ph = Math.floor(ch * dpr / 16) * 16;
-    canvas.width = pw;
-    canvas.height = ph;
-
+    canvas.width = pw; canvas.height = ph;
     _context = canvas.getContext("webgpu");
     _context.configure({ device: _device, format: _format, alphaMode: "premultiplied" });
-
-    if (instance.exports.do_prepare) {
-      instance.exports.do_prepare(
-        B(h(_device)), B(cw), B(ch), B(pw), B(ph),
-        B(imgHandles.vtx), B(imgHandles.idx), B(0),
-        B(imgHandles.tex), B(imgHandles.samp),
-      );
-    }
-
-    overlayEl.innerHTML = "";
-    if (instance.exports.init_overlay) {
-      try { instance.exports.init_overlay(B(h(overlayEl)), B(cw), B(ch)); } catch (_) {}
-    }
+    ex.do_prepare?.(B(h(_device)), B(cw), B(ch), B(pw), B(ph),
+      B(img.vtx), B(img.idx), B(0), B(img.tex), B(img.samp));
   }
-
-  // WASM scroll_tick returns 1 if still animating
-  animator._tickFn = (dt) => {
-    if (!instance.exports.scroll_tick) return false;
-    return N(instance.exports.scroll_tick(dt)) === 1;
-  };
 
   function renderAll() {
     animator.stop();
-    prepareScene();
-    const existing = overlayEl.querySelector(".input-area");
-    if (existing) existing.remove();
-    setupTextInput(overlayEl, textareaEl, container.clientWidth, instance.exports);
+    prepare();
   }
 
   renderAll();
-  console.log("ceangal: ready");
 
-  // ── Input events → WASM ──
+  // ── Wheel scroll ──
+
   canvas.style.touchAction = "none";
   canvas.style.overscrollBehavior = "none";
 
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
     const scale = e.deltaMode === 1 ? 20 : 1;
-    // Horizontal: shift+wheel, horizontal trackpad, or tilt wheel
     if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       const dx = -((Math.abs(e.deltaX) > Math.abs(e.deltaY)) ? e.deltaX : e.deltaY) * scale;
-      if (instance.exports.scroll_wheel_x) {
-        instance.exports.scroll_wheel_x(dx);
-        animator.kick();
-      }
+      ex.scroll_wheel_x?.(dx);
     } else {
-      const dy = -e.deltaY * scale;
-      if (instance.exports.scroll_wheel) {
-        instance.exports.scroll_wheel(dy);
-        animator.kick();
-      }
+      ex.scroll_wheel?.(-e.deltaY * scale);
     }
+    animator.kick();
   }, { passive: false });
 
-  // ── Pointer drag scroll ──
-  let _dragging = false;
-  let _lastPointerY = 0;
-  const _velSamples = []; // {time, y}
+  // ── Touch drag scroll ──
+
+  let _dragging = false, _lastPY = 0;
+  const _samples = [];
 
   canvas.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse" || e.button !== 0) return;
-    _dragging = true;
-    _lastPointerY = e.clientY;
-    _velSamples.length = 0;
-    _velSamples.push({ time: performance.now(), y: e.clientY });
+    _dragging = true; _lastPY = e.clientY;
+    _samples.length = 0; _samples.push({ t: performance.now(), y: e.clientY });
     canvas.setPointerCapture(e.pointerId);
   });
-
   canvas.addEventListener("pointermove", (e) => {
     if (!_dragging) return;
-    const dy = e.clientY - _lastPointerY;
-    _lastPointerY = e.clientY;
-    _velSamples.push({ time: performance.now(), y: e.clientY });
-    if (_velSamples.length > 4) _velSamples.shift();
-    if (instance.exports.scroll_drag) {
-      instance.exports.scroll_drag(dy);
-    }
+    const dy = e.clientY - _lastPY; _lastPY = e.clientY;
+    _samples.push({ t: performance.now(), y: e.clientY });
+    if (_samples.length > 4) _samples.shift();
+    ex.scroll_drag?.(dy);
   });
-
   canvas.addEventListener("pointerup", (e) => {
-    if (!_dragging) return;
-    _dragging = false;
-    // Estimate velocity from last samples
+    if (!_dragging) return; _dragging = false;
     let vel = 0;
-    if (_velSamples.length >= 2) {
-      const first = _velSamples[0];
-      const last = _velSamples[_velSamples.length - 1];
-      const dt = (last.time - first.time) / 1000;
-      if (dt > 0.001) vel = (last.y - first.y) / dt;
+    if (_samples.length >= 2) {
+      const a = _samples[0], b = _samples[_samples.length - 1];
+      const dt = (b.t - a.t) / 1000;
+      if (dt > 0.001) vel = (b.y - a.y) / dt;
     }
-    if (instance.exports.scroll_release) {
-      instance.exports.scroll_release(vel);
-      animator.kick();
-    }
+    ex.scroll_release?.(vel);
+    animator.kick();
   });
-
   canvas.addEventListener("pointercancel", () => { _dragging = false; });
 
-  let resizeTimer;
-  window.addEventListener("resize", () => {
-    overlayEl.style.visibility = "hidden";
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      renderAll();
-      overlayEl.style.visibility = "";
-    }, 150);
+  // ── Scrollbar mouse interaction ──
+
+  let _barAxis = null; // "y" | "x" | null
+  let _barStart = 0, _barThumbStart = 0;
+
+  canvas.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const cw = container.clientWidth, ch = container.clientHeight;
+
+    // Vertical scrollbar (right 20px)
+    if (mx > cw - 20 && ex.scrollbar_info_y) {
+      const top = Number(ex.scrollbar_info_y());
+      const h = Number(ex.scrollbar_height_y());
+      if (h > 1 && my >= top && my <= top + h) {
+        _barAxis = "y"; _barStart = my; _barThumbStart = top;
+        e.preventDefault(); return;
+      }
+    }
+    // Horizontal scrollbar (bottom 20px)
+    if (my > ch - 20 && ex.scrollbar_info_x) {
+      const left = Number(ex.scrollbar_info_x());
+      const w = Number(ex.scrollbar_width_x());
+      if (w > 1 && mx >= left && mx <= left + w) {
+        _barAxis = "x"; _barStart = mx; _barThumbStart = left;
+        e.preventDefault(); return;
+      }
+    }
   });
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) animator.stop();
+  window.addEventListener("mousemove", (e) => {
+    if (!_barAxis) return;
+    const rect = canvas.getBoundingClientRect();
+    if (_barAxis === "y") {
+      const my = e.clientY - rect.top;
+      const thumbH = Number(ex.scrollbar_height_y());
+      const track = container.clientHeight - thumbH;
+      if (track > 0) ex.scrollbar_set_frac_y?.(Math.max(0, Math.min(1, (_barThumbStart + my - _barStart) / track)));
+    } else {
+      const mx = e.clientX - rect.left;
+      const thumbW = Number(ex.scrollbar_width_x());
+      const track = container.clientWidth - thumbW;
+      if (track > 0) ex.scrollbar_set_frac_x?.(Math.max(0, Math.min(1, (_barThumbStart + mx - _barStart) / track)));
+    }
+    animator.kick();
   });
+
+  window.addEventListener("mouseup", () => { _barAxis = null; });
+
+  // ── Resize + visibility ──
+
+  let _resizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(_resizeTimer);
+    _resizeTimer = setTimeout(renderAll, 150);
+  });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) animator.stop(); });
 }

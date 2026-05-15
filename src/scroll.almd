@@ -1,0 +1,196 @@
+// ceangal scroll — physics + scrollbar state
+//
+// State machine per axis: IDLE → COASTING (friction) → BOUNCING (spring) → IDLE
+// Scrollbar: opacity fades in on scroll, out after idle delay.
+
+import math
+
+let IDLE = 0
+let COASTING = 1
+let BOUNCING = 2
+
+// ── Vertical state ──
+var pos_y = 0.0
+var vel_y = 0.0
+var min_y = 0.0
+var state_y = 0
+var bar_opacity_y = 0.0
+var bar_idle_y = 0.0
+
+// ── Horizontal state ──
+var pos_x = 0.0
+var vel_x = 0.0
+var min_x = 0.0
+var state_x = 0
+var bar_opacity_x = 0.0
+var bar_idle_x = 0.0
+
+// ── Bounds ──
+
+fn set_bounds(content_w: Float, content_h: Float, viewport_w: Float, viewport_h: Float) -> Unit = {
+  min_y = 0.0 - float.max(0.0, content_h - viewport_h)
+  pos_y = float.max(min_y, float.min(0.0, pos_y))
+  min_x = 0.0 - float.max(0.0, content_w - viewport_w)
+  pos_x = float.max(min_x, float.min(0.0, pos_x))
+}
+
+// ── Internal ──
+
+fn is_over_y() -> Bool = pos_y > 0.5 or pos_y < min_y - 0.5
+fn is_over_x() -> Bool = pos_x > 0.5 or pos_x < min_x - 0.5
+
+fn tick_axis(pos: Float, vel: Float, min_bound: Float, st: Int, dt: Float) -> { p: Float, v: Float, s: Int } = {
+  var p = pos
+  var v = vel
+  var s = st
+  if s == COASTING then {
+    let base = 0.95
+    var decay = base * base * base
+    if dt * 60.0 < 1.5 then { decay = base } else ()
+    if dt * 60.0 > 2.5 then { decay = base * base * base * base } else ()
+    v = v * decay
+    p = p + v * dt
+    let over = p > 0.5 or p < min_bound - 0.5
+    if over then {
+      s = BOUNCING
+      v = v * 0.15
+    } else if float.abs(v) < 0.5 then {
+      s = IDLE
+    } else ()
+  } else if s == BOUNCING then {
+    let target = if p < min_bound then min_bound else 0.0
+    let disp = p - target
+    let force = 0.0 - 100.0 * disp - 20.0 * v
+    v = v + force * dt
+    p = p + v * dt
+    p = float.max(min_bound - 120.0, float.min(120.0, p))
+    if float.abs(disp) < 0.5 and float.abs(v) < 0.5 then {
+      p = target
+      v = 0.0
+      s = IDLE
+    } else ()
+  } else ()
+  { p: p, v: v, s: s }
+}
+
+// ── Wheel ──
+
+fn wheel_y(dy: Float) -> Unit = {
+  vel_y = dy * 2.0
+  pos_y = pos_y + dy
+  state_y = if is_over_y() then BOUNCING else COASTING
+  bar_opacity_y = 1.0
+  bar_idle_y = 0.0
+}
+
+fn wheel_x(dx: Float) -> Unit = {
+  vel_x = dx * 2.0
+  pos_x = pos_x + dx
+  state_x = if is_over_x() then BOUNCING else COASTING
+  bar_opacity_x = 1.0
+  bar_idle_x = 0.0
+}
+
+// ── Drag ──
+
+fn drag_y(dy: Float) -> Unit = {
+  let over = if pos_y > 0.0 then pos_y
+             else if pos_y < min_y then min_y - pos_y
+             else 0.0
+  let resist = if over > 0.0 then 1.0 / (1.0 + over / 120.0) else 1.0
+  pos_y = pos_y + dy * resist
+  state_y = IDLE
+  bar_opacity_y = 1.0
+  bar_idle_y = 0.0
+}
+
+fn release_y(vel: Float) -> Unit = {
+  let capped = if float.abs(vel) > 8000.0 then 8000.0 * (if vel > 0.0 then 1.0 else 0.0 - 1.0) else vel
+  vel_y = capped
+  state_y = if float.abs(capped) > 0.5 then COASTING
+            else if is_over_y() then BOUNCING
+            else IDLE
+}
+
+// ── Scrollbar interaction ──
+
+fn scrollbar_thumb_y(viewport_h: Float, content_h: Float) -> { top: Float, height: Float } = {
+  if content_h <= viewport_h or viewport_h < 1.0 then { top: 0.0, height: 0.0 }
+  else {
+    let th = float.max(40.0, viewport_h * viewport_h / content_h)
+    let range = content_h - viewport_h
+    let frac = (0.0 - pos_y) / range
+    let top = float.max(0.0, float.min(viewport_h - th, frac * (viewport_h - th)))
+    { top: top, height: th }
+  }
+}
+
+fn scrollbar_set_y(frac: Float, content_h: Float, viewport_h: Float) -> Unit = {
+  let range = content_h - viewport_h
+  pos_y = 0.0 - float.max(0.0, float.min(range, frac * range))
+  vel_y = 0.0
+  state_y = IDLE
+  bar_opacity_y = 1.0
+  bar_idle_y = 0.0
+}
+
+fn scrollbar_thumb_x(viewport_w: Float, content_w: Float) -> { left: Float, width: Float } = {
+  if content_w <= viewport_w or viewport_w < 1.0 then { left: 0.0, width: 0.0 }
+  else {
+    let tw = float.max(40.0, viewport_w * viewport_w / content_w)
+    let range = content_w - viewport_w
+    let frac = (0.0 - pos_x) / range
+    let left = float.max(0.0, float.min(viewport_w - tw, frac * (viewport_w - tw)))
+    { left: left, width: tw }
+  }
+}
+
+fn scrollbar_set_x(frac: Float, content_w: Float, viewport_w: Float) -> Unit = {
+  let range = content_w - viewport_w
+  pos_x = 0.0 - float.max(0.0, float.min(range, frac * range))
+  vel_x = 0.0
+  state_x = IDLE
+  bar_opacity_x = 1.0
+  bar_idle_x = 0.0
+}
+
+// ── Tick (both axes) ──
+
+fn tick(dt_raw: Float) -> Int = {
+  let dt = float.min(dt_raw, 1.0 / 30.0)
+
+  // Physics
+  let ry = tick_axis(pos_y, vel_y, min_y, state_y, dt)
+  pos_y = ry.p
+  vel_y = ry.v
+  state_y = ry.s
+
+  let rx = tick_axis(pos_x, vel_x, min_x, state_x, dt)
+  pos_x = rx.p
+  vel_x = rx.v
+  state_x = rx.s
+
+  // Scrollbar fade
+  if state_y == IDLE then {
+    bar_idle_y = bar_idle_y + dt
+    if bar_idle_y > 1.2 then {
+      bar_opacity_y = float.max(0.0, bar_opacity_y - dt / 0.3)
+    } else ()
+  } else {
+    bar_opacity_y = 1.0
+    bar_idle_y = 0.0
+  }
+  if state_x == IDLE then {
+    bar_idle_x = bar_idle_x + dt
+    if bar_idle_x > 1.2 then {
+      bar_opacity_x = float.max(0.0, bar_opacity_x - dt / 0.3)
+    } else ()
+  } else {
+    bar_opacity_x = 1.0
+    bar_idle_x = 0.0
+  }
+
+  let scrolling = state_y != IDLE or state_x != IDLE
+  let fading = bar_opacity_y > 0.01 or bar_opacity_x > 0.01
+  if scrolling or fading then 1 else 0
+}

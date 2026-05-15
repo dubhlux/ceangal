@@ -1,7 +1,7 @@
-// snaidhm Phase 1 — Tiled path renderer (content-space 2D scroll)
+// snaidhm Phase 1 — Tiled path renderer (content-space 2D scroll + scrollbar)
 
 const TILE_SIZE: u32 = 16u;
-const MAX_SEGS_PER_TILE: u32 = 512u;
+const MAX_SEGS_PER_TILE: u32 = 64u;
 
 struct LineSeg {
   p0: vec2<f32>,
@@ -23,8 +23,8 @@ struct Params {
   num_paths: u32,
   scroll_y: f32,
   scroll_x: f32,
-  _pad0: u32,
-  _pad1: u32,
+  scrollbar_opacity_y: f32,
+  scrollbar_opacity_x: f32,
   _pad2: u32,
 }
 
@@ -70,7 +70,7 @@ fn evaluate_paint(paint: Paint, p: vec2<f32>) -> vec4<f32> {
 @group(0) @binding(6) var<storage, read>       paints: array<Paint>;
 @group(0) @binding(7) var<storage, read>       tile_cmds: array<u32>;
 
-const MAX_CMDS_PER_TILE: u32 = 32u;
+const MAX_CMDS_PER_TILE: u32 = 16u;
 
 fn seg_area(p0: vec2<f32>, p1: vec2<f32>) -> f32 {
   let y = p0.y;
@@ -113,19 +113,16 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   let py = gid.y;
   if (px >= params.width || py >= params.height) { return; }
 
-  // Map screen pixel to content pixel via scroll offset
   let content_px = f32(px) - params.scroll_x;
   let content_py = f32(py) - params.scroll_y;
   let max_content_px = f32(params.content_tiles_x * TILE_SIZE);
   let max_content_py = f32(params.content_tiles_y * TILE_SIZE);
 
-  // Outside content bounds → background
   if content_px < 0.0 || content_px >= max_content_px || content_py < 0.0 || content_py >= max_content_py {
     pixels[py * params.width + px] = pack_color(0.08, 0.08, 0.10, 1.0);
     return;
   }
 
-  // Content-space tile lookup (per-pixel)
   let content_tile_x = u32(content_px) / TILE_SIZE;
   let content_tile_y = u32(content_py) / TILE_SIZE;
   let tile_id = content_tile_y * params.content_tiles_x + content_tile_x;
@@ -134,7 +131,6 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   let tile_base = tile_id * MAX_SEGS_PER_TILE;
   let cmd_base = tile_id * MAX_CMDS_PER_TILE * 4u;
 
-  // Content-space NDC coordinate (for shadows + paint gradients)
   let p = vec2<f32>(
     content_px / f32(params.width) * 2.0 - 1.0,
     1.0 - content_py / f32(params.height) * 2.0,
@@ -150,7 +146,6 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
     color = mix(color, shadow.color.rgb, shadow_alpha);
   }
 
-  // Path fills — segment coords in content space
   let ndc_to_px = 0.5 * f32(params.width);
   let ndc_to_py = 0.5 * f32(params.height);
 
@@ -188,7 +183,7 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   pixels[py * params.width + px] = pack_color(color.x, color.y, color.z, 1.0);
 }
 
-// Fullscreen quad
+// ── Fullscreen quad + scrollbar overlay ──
 
 struct VSOut {
   @builtin(position) pos: vec4<f32>,
@@ -214,14 +209,62 @@ fn vs_fullscreen(@builtin(vertex_index) idx: u32) -> VSOut {
 @group(0) @binding(0) var<storage, read> render_pixels: array<u32>;
 @group(0) @binding(1) var<uniform>       render_params: Params;
 
+fn scrollbar_sdf(px_pos: vec2<f32>, thumb_center: vec2<f32>, thumb_half: vec2<f32>, corner_r: f32) -> f32 {
+  return sd_rounded_box(px_pos - thumb_center, thumb_half, corner_r);
+}
+
 @fragment
 fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-  let px = u32(uv.x * f32(render_params.width));
-  let py = u32(uv.y * f32(render_params.height));
-  let idx = py * render_params.width + px;
+  let w = f32(render_params.width);
+  let h = f32(render_params.height);
+  let px_u = u32(uv.x * w);
+  let py_u = u32(uv.y * h);
+  let idx = py_u * render_params.width + px_u;
   let packed = render_pixels[idx];
-  let r = f32(packed & 0xFFu) / 255.0;
-  let g = f32((packed >> 8u) & 0xFFu) / 255.0;
-  let b = f32((packed >> 16u) & 0xFFu) / 255.0;
+  var r = f32(packed & 0xFFu) / 255.0;
+  var g = f32((packed >> 8u) & 0xFFu) / 255.0;
+  var b = f32((packed >> 16u) & 0xFFu) / 255.0;
+
+  let px_x = uv.x * w;
+  let px_y = uv.y * h;
+
+  // ── Vertical scrollbar ──
+  let content_h = f32(render_params.content_tiles_y * TILE_SIZE);
+  if content_h > h && render_params.scrollbar_opacity_y > 0.01 {
+    let bar_w = 10.0;
+    let margin = 4.0;
+    let thumb_h = max(40.0, h * h / content_h);
+    let scroll_range = content_h - h;
+    let scroll_frac = clamp(-render_params.scroll_y / scroll_range, 0.0, 1.0);
+    let thumb_y = scroll_frac * (h - thumb_h);
+
+    let center = vec2<f32>(w - margin - bar_w * 0.5, thumb_y + thumb_h * 0.5);
+    let half = vec2<f32>(bar_w * 0.5, thumb_h * 0.5);
+    let d = scrollbar_sdf(vec2<f32>(px_x, px_y), center, half, bar_w * 0.5);
+    let a = (1.0 - smoothstep(-1.0, 0.5, d)) * 0.6 * render_params.scrollbar_opacity_y;
+    r = mix(r, 1.0, a);
+    g = mix(g, 1.0, a);
+    b = mix(b, 1.0, a);
+  }
+
+  // ── Horizontal scrollbar ──
+  let content_w = f32(render_params.content_tiles_x * TILE_SIZE);
+  if content_w > w && render_params.scrollbar_opacity_x > 0.01 {
+    let bar_h = 10.0;
+    let margin_x = 4.0;
+    let thumb_w = max(40.0, w * w / content_w);
+    let scroll_range_x = content_w - w;
+    let scroll_frac_x = clamp(-render_params.scroll_x / scroll_range_x, 0.0, 1.0);
+    let thumb_x = scroll_frac_x * (w - thumb_w);
+
+    let center_x = vec2<f32>(thumb_x + thumb_w * 0.5, h - margin_x - bar_h * 0.5);
+    let half_x = vec2<f32>(thumb_w * 0.5, bar_h * 0.5);
+    let d_x = scrollbar_sdf(vec2<f32>(px_x, px_y), center_x, half_x, bar_h * 0.5);
+    let a_x = (1.0 - smoothstep(-1.0, 0.5, d_x)) * 0.6 * render_params.scrollbar_opacity_x;
+    r = mix(r, 1.0, a_x);
+    g = mix(g, 1.0, a_x);
+    b = mix(b, 1.0, a_x);
+  }
+
   return vec4<f32>(r, g, b, 1.0);
 }

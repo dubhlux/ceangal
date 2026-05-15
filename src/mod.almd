@@ -1,282 +1,18 @@
 // ceangal — UI framework for Almide
 //
-// Creates DOM text overlay for accessibility, selection, and interaction.
-// Almide computes positions and describes elements; JS runtime creates DOM.
+// Orchestration layer: scene lifecycle, scroll API exports, DOM overlay.
+// Rendering via snaidhm, scroll physics via self.scroll.
 
 import self.dom as dom
 import self.layout as layout
+import self.scroll as scroll
 import snaidhm
 import snaidhm.ttf as ttf
 
-// ── String helper ──
-
-fn s(text: String) -> Int = {
-  dom.begin_str()
-  for b in string.to_bytes(text) { dom.push_byte(b) }
-  dom.commit_str()
-}
-
-// ── NDC → pixel conversion ──
-
-fn ndc_to_x(nx: Float, w: Float) -> Float = (nx + 1.0) * 0.5 * w
-fn ndc_to_y(ny: Float, h: Float) -> Float = (1.0 - ny) * 0.5 * h
-
-fn float_to_px(v: Float) -> Int = {
-  // "123.4px" → commit as string ID
-  let whole = float.to_int(v)
-  let frac = float.to_int((v - int.to_float(whole)) * 10.0)
-  dom.begin_str()
-  for b in string.to_bytes(int.to_string(whole)) { dom.push_byte(b) }
-  dom.push_byte(46) // '.'
-  for b in string.to_bytes(int.to_string(int.abs(frac))) { dom.push_byte(b) }
-  dom.push_byte(112) // 'p'
-  dom.push_byte(120) // 'x'
-  dom.commit_str()
-}
-
-fn int_to_px(v: Int) -> Int = {
-  dom.begin_str()
-  for b in string.to_bytes(int.to_string(v)) { dom.push_byte(b) }
-  dom.push_byte(112) // 'p'
-  dom.push_byte(120) // 'x'
-  dom.commit_str()
-}
-
-// ── Text line types ──
-
-let ALIGN_LEFT = 0
-let ALIGN_CENTER = 1
-
-let ROLE_TEXT = 0
-let ROLE_HEADING = 1
-let ROLE_LABEL = 2
-
-type OverlayLine = {
-  text: String,
-  size: Float,
-  x: Float,
-  y: Float,
-  align: Int,
-  role: Int,
-  level: Int,
-  label_for: String,
-  color: String,
-}
-
-fn heading(text: String, size: Float, x: Float, y: Float, align: Int, level: Int, color: String) -> OverlayLine =
-  { text: text, size: size, x: x, y: y, align: align, role: ROLE_HEADING, level: level, label_for: "", color: color }
-
-fn label(text: String, size: Float, x: Float, y: Float, align: Int, lf: String, color: String) -> OverlayLine =
-  { text: text, size: size, x: x, y: y, align: align, role: ROLE_LABEL, level: 0, label_for: lf, color: color }
-
-fn text(text: String, size: Float, x: Float, y: Float, align: Int, color: String) -> OverlayLine =
-  { text: text, size: size, x: x, y: y, align: align, role: ROLE_TEXT, level: 0, label_for: "", color: color }
-
-// ── Cached style property string IDs ──
-
-fn cache_style_ids() -> List[Int] = [
-  s("position"),    // 0
-  s("absolute"),    // 1
-  s("left"),        // 2
-  s("top"),         // 3
-  s("fontSize"),    // 4
-  s("fontFamily"),  // 5
-  s("sans-serif"),  // 6
-  s("margin"),      // 7
-  s("0"),           // 8
-  s("fontWeight"),  // 9
-  s("normal"),      // 10
-]
-
-// ── Shared layout builder (used by both render + overlay) ──
-//
-// Tree structure (indices in flat rect list):
-//   0  root: col
-//   1    header: col [rendered: rounded rect]
-//   2      title_area: leaf (text positioning)
-//   3      subtitle_area: leaf (text positioning)
-//   4    circles_row: row
-//   5      circle_col_0: col
-//   6        circle_0: leaf [rendered: circle]
-//   7        label_0: leaf (text positioning)
-//   8      circle_col_1: col
-//   9        circle_1: leaf [rendered: circle]
-//  10        label_1: leaf (text positioning)
-//  11      circle_col_2: col
-//  12        circle_2: leaf [rendered: circle]
-//  13        label_2: leaf (text positioning)
-//  14    cards_row: row
-//  15      card_0: col [rendered: rounded rect]
-//  16        card_label_0: leaf (text positioning)
-//  17      card_1: col [rendered: rounded rect]
-//  18        card_label_1: leaf (text positioning)
-//  19      card_2: col [rendered: rounded rect]
-//  20        card_label_2: leaf (text positioning)
-
-// Yoga website sample: mobile app layout
-// Tree indices:
-//  0  root (outer frame)
-//  1    content col
-//  2      header
-//  3      middle1
-//  4      middle2
-//  5      bottom_bar (ABSOLUTE)
-//  6        icon0
-//  7        icon1
-//  8        icon2
-//  9        icon3
-
-fn build_demo_layout(font: ttf.Font, vw: Float, vh: Float) -> { rects: List[layout.LayoutRect], texts: List[TextEntry] } = {
-  let phone_w = vh * 0.38
-  let phone_h = vh * 0.82
-
-  let dark = [0.2, 0.2, 0.25, 1.0]
-  let mid = [0.55, 0.55, 0.6, 1.0]
-  let light = [0.85, 0.85, 0.88, 1.0]
-  let white = [1.0, 1.0, 1.0, 1.0]
-  let accent = [0.35, 0.6, 0.95, 1.0]
-
-  // ── Status bar ──
-  //  idx 3: status_bar
-  //  idx 4: time_text, idx 5: signal_text
-  let status_bar = layout.row([
-    text_leaf(font, "9:41", 11.0, vh),
-    text_leaf(font, "100%", 11.0, vh),
-  ]) |> layout.with_justify(layout.JUSTIFY_BETWEEN) |> layout.with_align(layout.ALIGN_CENTER)
-     |> layout.with_padding(layout.edges_xy(12.0, 0.0)) |> layout.with_size(AUTO, 24.0)
-
-  // ── Album art (fills available space, padded) ──
-  //  idx 6: art_container, idx 7: album_art
-  let album_art = layout.leaf(AUTO, AUTO) |> layout.with_grow(1.0)
-  let art_container = layout.col([album_art])
-    |> layout.with_grow(1.0) |> layout.with_padding(layout.edges_all(20.0))
-
-  // ── Track info ──
-  //  idx 8: info_col, idx 9: title_text, idx 10: artist_text
-  let track_info = layout.col([
-    text_leaf(font, "Midnight City", 18.0, vh),
-    text_leaf(font, "M83 - Hurry Up, We are Dreaming", 12.0, vh),
-  ]) |> layout.with_align(layout.ALIGN_CENTER) |> layout.with_gap(4.0)
-
-  // ── Progress bar ──
-  //  idx 11: progress_row, idx 12: elapsed, idx 13: bar_bg, idx 14: bar_fill, idx 15: remaining
-  let bar_bg = layout.leaf(AUTO, 4.0) |> layout.with_grow(1.0)
-  let bar_fill = layout.leaf(AUTO, 4.0) |> layout.with_grow(0.4)
-  let progress = layout.col([
-    layout.row([bar_fill, bar_bg]) |> layout.with_gap(0.0),
-    layout.row([
-      text_leaf(font, "1:24", 10.0, vh),
-      text_leaf(font, "-2:51", 10.0, vh),
-    ]) |> layout.with_justify(layout.JUSTIFY_BETWEEN),
-  ]) |> layout.with_padding(layout.edges_xy(24.0, 0.0)) |> layout.with_gap(4.0)
-
-  // ── Controls ──
-  let controls = layout.row([
-    layout.leaf(28.0, 28.0),  // shuffle
-    layout.leaf(36.0, 36.0),  // prev
-    layout.leaf(52.0, 52.0),  // play
-    layout.leaf(36.0, 36.0),  // next
-    layout.leaf(28.0, 28.0),  // repeat
-  ]) |> layout.with_justify(layout.JUSTIFY_EVENLY) |> layout.with_align(layout.ALIGN_CENTER)
-     |> layout.with_padding(layout.edges_xy(16.0, 0.0))
-
-  // ── Bottom nav ──
-  let nav = layout.row([
-    layout.leaf(24.0, 24.0), layout.leaf(24.0, 24.0), layout.leaf(24.0, 24.0),
-  ]) |> layout.with_justify(layout.JUSTIFY_EVENLY) |> layout.with_align(layout.ALIGN_CENTER)
-     |> layout.with_size(AUTO, 48.0)
-
-  // ── Assemble ──
-  let content = layout.col([status_bar, art_container, track_info, progress, controls, nav])
-    |> layout.with_grow(1.0) |> layout.with_gap(8.0)
-
-  let phone = layout.col([content])
-    |> layout.with_size(phone_w, phone_h) |> layout.with_padding(layout.edges_all(0.0))
-
-  let root = layout.row([phone])
-    |> layout.with_justify(layout.JUSTIFY_CENTER) |> layout.with_align(layout.ALIGN_CENTER)
-    |> layout.with_size(vw, vh)
-
-  let rects = layout.layout(root, vw, vh)
-
-  // Build text entries from known indices
-  // Flatten tree to find text node indices:
-  // 0=root, 1=phone, 2=content, 3=status_bar, 4=time, 5=signal,
-  // 6=art_container, 7=album_art, 8=track_info, 9=title, 10=artist,
-  // 11=progress_col, 12=bar_row, 13=bar_fill, 14=bar_bg, 15=time_row, 16=elapsed, 17=remaining,
-  // 18=controls, 19-23=buttons, 24=nav, 25-27=nav_items
-
-  let texts = [
-    { rect_idx: 4, chars: snaidhm.str("9:41"), font_size: 11.0, color: mid, align: 0 },
-    { rect_idx: 5, chars: snaidhm.str("100%"), font_size: 11.0, color: mid, align: 0 },
-    { rect_idx: 9, chars: snaidhm.str("Midnight City"), font_size: 18.0, color: white, align: 1 },
-    { rect_idx: 10, chars: snaidhm.str("M83 - Hurry Up, We are Dreaming"), font_size: 12.0, color: mid, align: 1 },
-    { rect_idx: 16, chars: snaidhm.str("1:24"), font_size: 10.0, color: mid, align: 0 },
-    { rect_idx: 17, chars: snaidhm.str("-2:51"), font_size: 10.0, color: mid, align: 0 },
-  ]
-
-  { rects: rects, texts: texts }
-}
-
-// ── Text items positioned from layout rects ──
-
-type OverlayItem = { text_str: String, size: Float, px_x: Float, px_y: Float, align: Int, tag: String }
-
-fn overlay_items(rects: List[layout.LayoutRect]) -> List[OverlayItem] = {
-  // No text overlay for Yoga sample demo
-  []
-}
-
-// ── Create DOM text overlay (positioned from layout rects) ──
-
-@export(wasm, "init_overlay")
-fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = {
-  let w = int.to_float(canvas_w)
-  let h = int.to_float(canvas_h)
-  let font = ttf.parse_font()
-  let demo = build_demo_layout(font, w, h)
-  let rects = demo.rects
-  let st = cache_style_ids()
-
-  for entry in demo.texts {
-    let rect = rects[entry.rect_idx]
-    let el = dom.create_element(s("span"))
-    // Convert chars back to string for DOM
-    dom.set_text(el, s(string.from_bytes(entry.chars)))
-    dom.set_style(el, st[0], st[1])         // position: absolute
-    dom.set_style(el, st[4], float_to_px(entry.font_size))
-    dom.set_style(el, st[5], st[6])         // fontFamily: sans-serif
-
-    dom.append_child(overlay, el)
-
-    let el_w = dom.get_offset_width(el)
-    let left_px = if entry.align == 1 then
-      rect.x + rect.w / 2.0 - el_w / 2.0
-    else
-      rect.x
-
-    dom.set_style(el, st[2], float_to_px(left_px))
-    dom.set_style(el, st[3], float_to_px(rect.y + entry.font_size * 0.2))
-  }
-}
-
-// ── Textarea position (exported for JS text input positioning) ──
-
-// Textarea exports (unused in Yoga sample, kept for API compat)
-@export(wasm, "textarea_x")
-fn textarea_x(vw: Int, vh: Int) -> Float = 0.0
-@export(wasm, "textarea_y")
-fn textarea_y(vw: Int, vh: Int) -> Float = 0.0
-@export(wasm, "textarea_w")
-fn textarea_w(vw: Int, vh: Int) -> Float = 0.0
-
-// Local constant (cross-module let workaround)
-let AUTO = -1.0
-
-// ── Scene cache (module-level var, persists across frames) ──
+// ── Scene cache ──
 
 var cached_scene: snaidhm.SceneHandle = {
-  device: 0, width: 0, height: 0, tiles_x: 0, viewport_tiles_y: 0,
+  device: 0, width: 0, height: 0, viewport_tiles_x: 0, viewport_tiles_y: 0,
   params_buf: 0, pixel_buf: 0,
   compute_pipeline: 0, compute_bg: 0,
   quad_pipeline: 0, quad_bg: 0,
@@ -284,241 +20,197 @@ var cached_scene: snaidhm.SceneHandle = {
   img_vtx: 0, img_idx: 0, img_count: 0, format: 0,
 }
 var scene_ready = false
-var cached_content_height = 0.0
-var cached_viewport_height = 0.0
+var viewport_w = 0.0
+var viewport_h = 0.0
+var content_w = 0.0
+var content_h = 0.0
 
-// ── Scroll physics state ──
-
-let SCROLL_IDLE = 0
-let SCROLL_COASTING = 1
-let SCROLL_BOUNCING = 2
-
-var scroll_pos = 0.0
-var scroll_vel = 0.0
-var scroll_min_bound = 0.0
-var scroll_state = 0
-
-var scroll_pos_x = 0.0
-var scroll_vel_x = 0.0
-var scroll_min_bound_x = 0.0
-var scroll_state_x = 0
-
-// ── Text-aware layout nodes ──
-// TextEntry: links a layout node index to text content for rendering
-
-type TextEntry = { rect_idx: Int, chars: List[Int], font_size: Float, color: List[Float], align: Int }
-
-// Measure text width using TTF parser, create a leaf node with measured size
-fn text_leaf(font: ttf.Font, text: String, font_size: Float, viewport_h: Float) -> layout.Node = {
-  let chars = string.to_bytes(text)
-  let upm = int.to_float(font.units_per_em)
-  let scale = font_size * 2.0 / viewport_h / upm
-  let measured_w = list.fold(chars, 0.0, (acc, ch) =>
-    acc + int.to_float(ttf.get_advance_width(font, ttf.char_to_glyph_id(font, ch))) * scale
-  )
-  // Width is in NDC, convert back to pixels
-  let w_px = measured_w * viewport_h / 2.0
-  let h_px = font_size * 1.2
-  layout.leaf(w_px, h_px)
-}
-
-// Generate GPU text cubics from layout rects + text entries
-fn render_texts(entries: List[TextEntry], rects: List[layout.LayoutRect],
-                vw: Float, vh: Float) -> { cubics: List[snaidhm.Cubic], paints: List[snaidhm.Paint] } = {
-  var specs: List[snaidhm.TextSpec] = []
-  for entry in entries {
-    let rect = rects[entry.rect_idx]
-    // Text positioned at center-x, baseline-y of the rect
-    let ndc_x = if entry.align == 1 then
-      px_to_ndc_x(rect.x + rect.w / 2.0, vw)  // center
-    else
-      px_to_ndc_x(rect.x, vw)  // left
-    let ndc_y = px_to_ndc_y(rect.y + rect.h * 0.75, vh)  // baseline approx
-    specs = specs + [snaidhm.text_spec(entry.chars, entry.font_size, ndc_x, ndc_y, entry.align, entry.color)]
-  }
-  snaidhm.build_text_cubics(specs, vh)
-}
-
-// ── Layout → NDC conversion ──
-// Layout engine works in pixels (0,0 = top-left). snaidhm uses NDC (-1..1).
+// ── NDC helpers ──
 
 fn px_to_ndc_x(px: Float, vw: Float) -> Float = px / vw * 2.0 - 1.0
 fn px_to_ndc_y(px: Float, vh: Float) -> Float = 1.0 - px / vh * 2.0
 fn px_to_ndc_w(px: Float, vw: Float) -> Float = px / vw * 2.0
 fn px_to_ndc_h(px: Float, vh: Float) -> Float = px / vh * 2.0
 
-// ── Render scene via snaidhm (layout-driven) ──
+// ── Drawing ──
 
-// ── Build scene data (cubics, paints, shadows) from layout ──
-
-fn build_scene_data(vw: Float, vh: Float) -> { cubics: List[snaidhm.Cubic], paints: List[snaidhm.Paint], shadows: List[snaidhm.Shadow], content_w: Float, content_h: Float } = {
-  let dc = [0.5, 0.5, 0.5, 1.0]
-  // Content = 200vw × 100vh  (red left, blue right)
-  let red_cubics = snaidhm.round_rect_cubics(-1.0, -1.0, 2.0, 2.0, 0.01, dc, 0)
-  let blue_cubics = snaidhm.round_rect_cubics(1.0, -1.0, 2.0, 2.0, 0.01, dc, 1)
-  let cubics = red_cubics + blue_cubics
-  let paints = [
-    snaidhm.solid(0.9, 0.2, 0.2, 1.0),
-    snaidhm.solid(0.2, 0.3, 0.9, 1.0),
-  ]
-  let shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
-  let content_w = vw * 2.0
-  let content_h = vh
-  { cubics: cubics, paints: paints, shadows: shadows, content_w: content_w, content_h: content_h }
-}
-
-// ── Prepare scene (called on init + resize) ──
-
-@export(wasm, "prepare_scene")
-fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
-  let vw = int.to_float(css_w)
-  let vh = int.to_float(css_h)
-
-  let data = build_scene_data(vw, vh)
-
-  // content dimensions in physical pixels (same DPR scaling as viewport)
-  let dpr_scale = int.to_float(phys_h) / vh
-  let content_phys_w = float.to_int(data.content_w * dpr_scale) / 16 * 16
-  let content_phys_h = float.to_int(data.content_h * dpr_scale) / 16 * 16
-  cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, content_phys_w, content_phys_h, data.cubics, data.shadows, data.paints,
-    img_vtx, img_idx, img_count, img_texture, img_sampler)
-  scene_ready = true
-  cached_content_height = data.content_h
-  cached_viewport_height = vh
-
-  // Set scroll bounds (vertical)
-  scroll_min_bound = 0.0 - float.max(0.0, data.content_h - vh)
-  scroll_pos = float.max(scroll_min_bound, float.min(0.0, scroll_pos))
-  // Set scroll bounds (horizontal)
-  scroll_min_bound_x = 0.0 - float.max(0.0, data.content_w - vw)
-  scroll_pos_x = float.max(scroll_min_bound_x, float.min(0.0, scroll_pos_x))
-
-  // Draw first frame immediately
-  snaidhm.draw_frame(cached_scene, 0.0)
-}
-
-// ── Scroll API (called from JS event bridge) ──
-
-fn scroll_is_overscrolled() -> Bool =
-  scroll_pos > 0.5 or scroll_pos < scroll_min_bound - 0.5
+fn dpr_scale() -> Float = int.to_float(cached_scene.height) / viewport_h
 
 fn draw_at_scroll() -> Unit = {
   if scene_ready then {
-    let dpr = int.to_float(cached_scene.height) / cached_viewport_height
-    snaidhm.draw_frame_2d(cached_scene, scroll_pos_x * dpr, scroll_pos * dpr)
+    let s = dpr_scale()
+    snaidhm.draw_frame_2d(cached_scene,
+      scroll.pos_x * s, scroll.pos_y * s,
+      scroll.bar_opacity_y, scroll.bar_opacity_x)
   } else ()
 }
 
-fn scroll_is_overscrolled_x() -> Bool =
-  scroll_pos_x > 0.5 or scroll_pos_x < scroll_min_bound_x - 0.5
+// ── Prepare (called on init + resize) ──
+
+@export(wasm, "prepare_scene")
+fn do_prepare(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
+              img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
+  let vw = int.to_float(css_w)
+  let vh = int.to_float(css_h)
+  let data = build_test_scene(vw, vh)
+
+  let dpr = int.to_float(phys_h) / vh
+  let cw = float.to_int(data.content_w * dpr) / 16 * 16
+  let ch = float.to_int(data.content_h * dpr) / 16 * 16
+  cached_scene = snaidhm.prepare_scene(device, phys_w, phys_h, cw, ch,
+    data.cubics, data.shadows, data.paints,
+    img_vtx, img_idx, img_count, img_texture, img_sampler)
+
+  scene_ready = true
+  viewport_w = vw
+  viewport_h = vh
+  content_w = data.content_w
+  content_h = data.content_h
+  scroll.set_bounds(data.content_w, data.content_h, vw, vh)
+  snaidhm.draw_frame(cached_scene, 0.0)
+}
+
+// ── Scroll exports ──
 
 @export(wasm, "scroll_wheel")
-fn scroll_wheel(dy: Float) -> Unit = {
-  scroll_vel = dy * 2.0
-  scroll_pos = scroll_pos + dy
-  scroll_state = if scroll_is_overscrolled() then SCROLL_BOUNCING else SCROLL_COASTING
-  draw_at_scroll()
-}
+fn scroll_wheel(dy: Float) -> Unit = { scroll.wheel_y(dy); draw_at_scroll() }
 
 @export(wasm, "scroll_wheel_x")
-fn scroll_wheel_x(dx: Float) -> Unit = {
-  scroll_vel_x = dx * 2.0
-  scroll_pos_x = scroll_pos_x + dx
-  scroll_state_x = if scroll_is_overscrolled_x() then SCROLL_BOUNCING else SCROLL_COASTING
-  draw_at_scroll()
-}
+fn scroll_wheel_x(dx: Float) -> Unit = { scroll.wheel_x(dx); draw_at_scroll() }
 
 @export(wasm, "scroll_drag")
-fn scroll_drag(dy: Float) -> Unit = {
-  // Overscroll resistance
-  let over = if scroll_pos > 0.0 then scroll_pos
-             else if scroll_pos < scroll_min_bound then scroll_min_bound - scroll_pos
-             else 0.0
-  let resist = if over > 0.0 then 1.0 / (1.0 + over / 120.0) else 1.0
-  scroll_pos = scroll_pos + dy * resist
-  scroll_state = SCROLL_IDLE
-  draw_at_scroll()
-}
+fn scroll_drag(dy: Float) -> Unit = { scroll.drag_y(dy); draw_at_scroll() }
 
 @export(wasm, "scroll_release")
-fn scroll_release(vel: Float) -> Unit = {
-  let capped = if float.abs(vel) > 8000.0 then 8000.0 * (if vel > 0.0 then 1.0 else 0.0 - 1.0) else vel
-  scroll_vel = capped
-  scroll_state = if float.abs(capped) > 0.5 then SCROLL_COASTING
-                 else if scroll_is_overscrolled() then SCROLL_BOUNCING
-                 else SCROLL_IDLE
-}
+fn scroll_release(vel: Float) -> Unit = scroll.release_y(vel)
 
 @export(wasm, "scroll_tick")
-fn scroll_tick(dt_raw: Float) -> Int = {
-  let dt = float.min(dt_raw, 1.0 / 30.0)
-
-  if scroll_state == SCROLL_COASTING then {
-    // Friction decay
-    let frames = dt * 60.0
-    var decay = 1.0
-    // math.pow workaround: manual exponential for small frame counts
-    let base = 0.95  // 1.0 - friction(0.05)
-    decay = base * base * base  // ~0.857 for 3 frames at 60fps nominal
-    if frames < 1.5 then { decay = base } else ()
-    if frames > 2.5 then { decay = base * base * base * base } else ()
-    scroll_vel = scroll_vel * decay
-    scroll_pos = scroll_pos + scroll_vel * dt
-    if scroll_is_overscrolled() then {
-      scroll_state = SCROLL_BOUNCING
-      scroll_vel = scroll_vel * 0.15
-    } else if float.abs(scroll_vel) < 0.5 then {
-      scroll_state = SCROLL_IDLE
-    } else ()
-  } else if scroll_state == SCROLL_BOUNCING then {
-    let target = if scroll_pos < scroll_min_bound then scroll_min_bound else 0.0
-    let disp = scroll_pos - target
-    let force = 0.0 - 100.0 * disp - 20.0 * scroll_vel
-    scroll_vel = scroll_vel + force * dt
-    scroll_pos = scroll_pos + scroll_vel * dt
-    scroll_pos = float.max(scroll_min_bound - 120.0, float.min(120.0, scroll_pos))
-    if float.abs(disp) < 0.5 and float.abs(scroll_vel) < 0.5 then {
-      scroll_pos = target
-      scroll_vel = 0.0
-      scroll_state = SCROLL_IDLE
-    } else ()
-  } else ()
-
-  // Horizontal physics (same model)
-  if scroll_state_x == SCROLL_COASTING then {
-    let base_x = 0.95
-    var decay_x = base_x * base_x * base_x
-    if dt * 60.0 < 1.5 then { decay_x = base_x } else ()
-    if dt * 60.0 > 2.5 then { decay_x = base_x * base_x * base_x * base_x } else ()
-    scroll_vel_x = scroll_vel_x * decay_x
-    scroll_pos_x = scroll_pos_x + scroll_vel_x * dt
-    if scroll_is_overscrolled_x() then {
-      scroll_state_x = SCROLL_BOUNCING
-      scroll_vel_x = scroll_vel_x * 0.15
-    } else if float.abs(scroll_vel_x) < 0.5 then {
-      scroll_state_x = SCROLL_IDLE
-    } else ()
-  } else if scroll_state_x == SCROLL_BOUNCING then {
-    let target_x = if scroll_pos_x < scroll_min_bound_x then scroll_min_bound_x else 0.0
-    let disp_x = scroll_pos_x - target_x
-    let force_x = 0.0 - 100.0 * disp_x - 20.0 * scroll_vel_x
-    scroll_vel_x = scroll_vel_x + force_x * dt
-    scroll_pos_x = scroll_pos_x + scroll_vel_x * dt
-    scroll_pos_x = float.max(scroll_min_bound_x - 120.0, float.min(120.0, scroll_pos_x))
-    if float.abs(disp_x) < 0.5 and float.abs(scroll_vel_x) < 0.5 then {
-      scroll_pos_x = target_x
-      scroll_vel_x = 0.0
-      scroll_state_x = SCROLL_IDLE
-    } else ()
-  } else ()
-
+fn scroll_tick(dt: Float) -> Int = {
+  let running = scroll.tick(dt)
   draw_at_scroll()
-  if scroll_state != SCROLL_IDLE or scroll_state_x != SCROLL_IDLE then 1 else 0
+  running
 }
 
-// ── Legacy one-shot render (backwards compat) ──
+// ── Scrollbar exports (JS queries geometry for hit testing) ──
+
+@export(wasm, "scrollbar_info_y")
+fn scrollbar_info_y() -> Float = {
+  // Pack thumb_top and thumb_height as two values via separate exports
+  let t = scroll.scrollbar_thumb_y(viewport_h, content_h)
+  t.top
+}
+
+@export(wasm, "scrollbar_height_y")
+fn scrollbar_height_y() -> Float = {
+  let t = scroll.scrollbar_thumb_y(viewport_h, content_h)
+  t.height
+}
+
+@export(wasm, "scrollbar_set_frac_y")
+fn scrollbar_set_frac_y(frac: Float) -> Unit = {
+  scroll.scrollbar_set_y(frac, content_h, viewport_h)
+  draw_at_scroll()
+}
+
+@export(wasm, "scrollbar_info_x")
+fn scrollbar_info_x() -> Float = {
+  let t = scroll.scrollbar_thumb_x(viewport_w, content_w)
+  t.left
+}
+
+@export(wasm, "scrollbar_width_x")
+fn scrollbar_width_x() -> Float = {
+  let t = scroll.scrollbar_thumb_x(viewport_w, content_w)
+  t.width
+}
+
+@export(wasm, "scrollbar_set_frac_x")
+fn scrollbar_set_frac_x(frac: Float) -> Unit = {
+  scroll.scrollbar_set_x(frac, content_w, viewport_w)
+  draw_at_scroll()
+}
+
+// ── Legacy compat ──
 
 @export(wasm, "render_scene")
-fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int, img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit = {
+fn do_render(device: Int, css_w: Int, css_h: Int, phys_w: Int, phys_h: Int,
+             img_vtx: Int, img_idx: Int, img_count: Int, img_texture: Int, img_sampler: Int) -> Unit =
   do_prepare(device, css_w, css_h, phys_w, phys_h, img_vtx, img_idx, img_count, img_texture, img_sampler)
+
+// ══════════════════════════════════════════════════════════════
+// Test scene (temporary — replace with real content builder)
+// ══════════════════════════════════════════════════════════════
+
+type SceneData = {
+  cubics: List[snaidhm.Cubic],
+  paints: List[snaidhm.Paint],
+  shadows: List[snaidhm.Shadow],
+  content_w: Float,
+  content_h: Float,
 }
+
+fn build_test_scene(vw: Float, vh: Float) -> SceneData = {
+  let dc = [0.5, 0.5, 0.5, 1.0]
+  let r = 0.01
+  // 200vw × 200vh: 4 quadrants (red / green / blue / yellow)
+  let cubics =
+    snaidhm.round_rect_cubics(-1.0, -1.0, 2.0, 2.0, r, dc, 0) +
+    snaidhm.round_rect_cubics(1.0,  -1.0, 2.0, 2.0, r, dc, 1) +
+    snaidhm.round_rect_cubics(-1.0, -3.0, 2.0, 2.0, r, dc, 2) +
+    snaidhm.round_rect_cubics(1.0,  -3.0, 2.0, 2.0, r, dc, 3)
+  let paints = [
+    snaidhm.solid(0.9, 0.2, 0.2, 1.0),
+    snaidhm.solid(0.2, 0.8, 0.3, 1.0),
+    snaidhm.solid(0.2, 0.3, 0.9, 1.0),
+    snaidhm.solid(0.9, 0.8, 0.2, 1.0),
+  ]
+  let shadows = [snaidhm.rect_shadow(99.0, 99.0, 0.01, 0.01, 0.0, 0.0, 0.0, 0.001, [0.0,0.0,0.0,0.0])]
+  { cubics: cubics, paints: paints, shadows: shadows, content_w: vw * 2.0, content_h: vh * 2.0 }
+}
+
+// ══════════════════════════════════════════════════════════════
+// DOM overlay (music player demo — dormant, kept for future use)
+// ══════════════════════════════════════════════════════════════
+
+let AUTO = -1.0
+let ALIGN_LEFT = 0
+let ALIGN_CENTER = 1
+
+fn s(text: String) -> Int = {
+  dom.begin_str()
+  for b in string.to_bytes(text) { dom.push_byte(b) }
+  dom.commit_str()
+}
+
+fn float_to_px(v: Float) -> Int = {
+  let whole = float.to_int(v)
+  let frac = float.to_int((v - int.to_float(whole)) * 10.0)
+  dom.begin_str()
+  for b in string.to_bytes(int.to_string(whole)) { dom.push_byte(b) }
+  dom.push_byte(46)
+  for b in string.to_bytes(int.to_string(int.abs(frac))) { dom.push_byte(b) }
+  dom.push_byte(112) dom.push_byte(120)
+  dom.commit_str()
+}
+
+type TextEntry = { rect_idx: Int, chars: List[Int], font_size: Float, color: List[Float], align: Int }
+
+fn text_leaf(font: ttf.Font, text: String, font_size: Float, vh: Float) -> layout.Node = {
+  let chars = string.to_bytes(text)
+  let upm = int.to_float(font.units_per_em)
+  let scale = font_size * 2.0 / vh / upm
+  let w_px = list.fold(chars, 0.0, (acc, ch) =>
+    acc + int.to_float(ttf.get_advance_width(font, ttf.char_to_glyph_id(font, ch))) * scale
+  ) * vh / 2.0
+  layout.leaf(w_px, font_size * 1.2)
+}
+
+@export(wasm, "init_overlay")
+fn init_overlay(overlay: Int, canvas_w: Int, canvas_h: Int) -> Unit = ()
+
+@export(wasm, "textarea_x")
+fn textarea_x(vw: Int, vh: Int) -> Float = 0.0
+@export(wasm, "textarea_y")
+fn textarea_y(vw: Int, vh: Int) -> Float = 0.0
+@export(wasm, "textarea_w")
+fn textarea_w(vw: Int, vh: Int) -> Float = 0.0
