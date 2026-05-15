@@ -41,7 +41,8 @@ fn draw_at_scroll() -> Unit = {
     let s = dpr_scale()
     snaidhm.draw_frame_2d(cached_scene,
       scroll.pos_x * s, scroll.pos_y * s,
-      scroll.bar_opacity_y, scroll.bar_opacity_x)
+      scroll.bar_opacity_y, scroll.bar_opacity_x,
+      scroll.bar_hover_y, scroll.bar_hover_x)
   } else ()
 }
 
@@ -127,6 +128,37 @@ fn scrollbar_width_x() -> Float = {
 @export(wasm, "scrollbar_set_frac_x")
 fn scrollbar_set_frac_x(frac: Float) -> Unit = {
   scroll.scrollbar_set_x(frac, content_w, viewport_w)
+  draw_at_scroll()
+}
+
+// ── Scrollbar hover ──
+
+@export(wasm, "scrollbar_set_hover_y")
+fn scrollbar_set_hover_y(h: Float) -> Unit = {
+  scroll.set_hover_y(h)
+  // Show scrollbar on hover even if not scrolling
+  if h > 0.5 then { scroll.bar_opacity_y = 1.0; scroll.bar_idle_y = 0.0 } else ()
+  draw_at_scroll()
+}
+
+@export(wasm, "scrollbar_set_hover_x")
+fn scrollbar_set_hover_x(h: Float) -> Unit = {
+  scroll.set_hover_x(h)
+  if h > 0.5 then { scroll.bar_opacity_x = 1.0; scroll.bar_idle_x = 0.0 } else ()
+  draw_at_scroll()
+}
+
+// ── Track tap ──
+
+@export(wasm, "scrollbar_track_tap_y")
+fn scrollbar_track_tap_y(click_y: Float) -> Unit = {
+  scroll.track_tap_y(click_y, viewport_h, content_h)
+  draw_at_scroll()
+}
+
+@export(wasm, "scrollbar_track_tap_x")
+fn scrollbar_track_tap_x(click_x: Float) -> Unit = {
+  scroll.track_tap_x(click_x, viewport_w, content_w)
   draw_at_scroll()
 }
 

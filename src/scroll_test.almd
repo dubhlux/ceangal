@@ -2,57 +2,32 @@
 
 import self.scroll as scroll
 
-// ── Helpers ──
-
 fn approx(a: Float, b: Float, tol: Float) -> Bool =
   float.abs(a - b) < tol
-
-fn reset() -> Unit = {
-  scroll.pos_y = 0.0
-  scroll.vel_y = 0.0
-  scroll.min_y = 0.0
-  scroll.state_y = 0
-  scroll.pos_x = 0.0
-  scroll.vel_x = 0.0
-  scroll.min_x = 0.0
-  scroll.state_x = 0
-  scroll.bar_opacity_y = 0.0
-  scroll.bar_opacity_x = 0.0
-  scroll.bar_idle_y = 0.0
-  scroll.bar_idle_x = 0.0
-  scroll.bar_hover_y = 0.0
-  scroll.bar_hover_x = 0.0
-}
 
 // ── set_bounds ──
 
 test "set_bounds clamps position" {
-  reset()
-  scroll.pos_y = -500.0
+  scroll.reset()
+  scroll.set_pos_y(-500.0)
   scroll.set_bounds(200.0, 100.0, 200.0, 100.0)
-  // min_y = -(100 - 100) for vertical with content_h=100, viewport_h=100... wait
-  // set_bounds(content_w, content_h, viewport_w, viewport_h)
-  // Actually: content 200x100, viewport 200x100
-  // min_y = -(100 - 100) = 0. pos_y clamped to max(0, min(0, -500)) = 0
   assert(scroll.pos_y == 0.0)
 }
 
 test "set_bounds vertical scroll range" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 500.0, 100.0, 200.0)
-  // min_y = -(500 - 200) = -300
   assert(scroll.min_y == -300.0)
 }
 
 test "set_bounds horizontal scroll range" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(800.0, 100.0, 400.0, 100.0)
-  // min_x = -(800 - 400) = -400
   assert(scroll.min_x == -400.0)
 }
 
 test "set_bounds no scroll when content fits" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 100.0, 200.0, 200.0)
   assert(scroll.min_y == 0.0)
   assert(scroll.min_x == 0.0)
@@ -61,17 +36,17 @@ test "set_bounds no scroll when content fits" {
 // ── wheel ──
 
 test "wheel_y sets position and velocity" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
   scroll.wheel_y(-50.0)
   assert(scroll.pos_y == -50.0)
   assert(scroll.vel_y == -100.0)
-  assert(scroll.state_y == 1) // COASTING
+  assert(scroll.state_y == 1)
   assert(scroll.bar_opacity_y == 1.0)
 }
 
 test "wheel_x sets position and velocity" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(1000.0, 100.0, 500.0, 100.0)
   scroll.wheel_x(-30.0)
   assert(scroll.pos_x == -30.0)
@@ -80,22 +55,20 @@ test "wheel_x sets position and velocity" {
 }
 
 test "wheel overscroll triggers bouncing" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 200.0, 100.0, 200.0)
-  // content fits viewport, min_y = 0
   scroll.wheel_y(10.0)
-  // pos_y = 10 > 0 → overscrolled → BOUNCING
-  assert(scroll.state_y == 2) // BOUNCING
+  assert(scroll.state_y == 2)
 }
 
 // ── tick: coasting ──
 
 test "coasting decays velocity" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 2000.0, 100.0, 500.0)
-  scroll.pos_y = -100.0
-  scroll.vel_y = -500.0
-  scroll.state_y = 1 // COASTING
+  scroll.set_pos_y(-100.0)
+  scroll.set_vel_y(-500.0)
+  scroll.set_state_y(1)
   let before_vel = scroll.vel_y
   let _ = scroll.tick(0.016)
   assert(float.abs(scroll.vel_y) < float.abs(before_vel))
@@ -103,36 +76,32 @@ test "coasting decays velocity" {
 }
 
 test "coasting stops at threshold" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 2000.0, 100.0, 500.0)
-  scroll.pos_y = -100.0
-  scroll.vel_y = -0.1
-  scroll.state_y = 1
+  scroll.set_pos_y(-100.0)
+  scroll.set_vel_y(-0.1)
+  scroll.set_state_y(1)
   let _ = scroll.tick(0.016)
-  assert(scroll.state_y == 0) // IDLE
+  assert(scroll.state_y == 0)
 }
 
 // ── tick: bouncing ──
 
 test "bouncing returns to boundary" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 200.0, 100.0, 200.0)
-  scroll.pos_y = 50.0 // overscrolled above top
-  scroll.vel_y = 0.0
-  scroll.state_y = 2 // BOUNCING
-  // Run many ticks
+  scroll.set_pos_y(50.0)
+  scroll.set_state_y(2)
   for _ in 0..200 { let _ = scroll.tick(0.016) }
   assert(approx(scroll.pos_y, 0.0, 1.0))
-  assert(scroll.state_y == 0) // IDLE
+  assert(scroll.state_y == 0)
 }
 
 test "bouncing at bottom returns to min" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
-  // min_y = -500
-  scroll.pos_y = -550.0 // overscrolled past bottom
-  scroll.vel_y = 0.0
-  scroll.state_y = 2
+  scroll.set_pos_y(-550.0)
+  scroll.set_state_y(2)
   for _ in 0..200 { let _ = scroll.tick(0.016) }
   assert(approx(scroll.pos_y, -500.0, 1.0))
   assert(scroll.state_y == 0)
@@ -140,30 +109,33 @@ test "bouncing at bottom returns to min" {
 
 // ── drag + release ──
 
-test "drag_y moves position with resistance" {
-  reset()
+test "drag_y moves position" {
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
   scroll.drag_y(-20.0)
   assert(scroll.pos_y == -20.0)
-  // Drag when overscrolled has resistance
-  scroll.pos_y = 50.0
+}
+
+test "drag_y rubber band when overscrolled" {
+  scroll.reset()
+  scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
+  scroll.set_pos_y(50.0)
   let before = scroll.pos_y
   scroll.drag_y(10.0)
-  // Should move less than 10 due to rubber band
   assert(scroll.pos_y - before < 10.0)
 }
 
 test "release_y starts coasting" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
-  scroll.pos_y = -100.0
+  scroll.set_pos_y(-100.0)
   scroll.release_y(-500.0)
-  assert(scroll.state_y == 1) // COASTING
+  assert(scroll.state_y == 1)
   assert(scroll.vel_y == -500.0)
 }
 
 test "release_y caps velocity" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
   scroll.release_y(-99999.0)
   assert(float.abs(scroll.vel_y) <= 6001.0)
@@ -171,73 +143,64 @@ test "release_y caps velocity" {
 
 // ── scrollbar geometry ──
 
-test "scrollbar_thumb_y returns correct size" {
-  reset()
+test "scrollbar_thumb_y size and position at top" {
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
   let t = scroll.scrollbar_thumb_y(500.0, 1000.0)
-  // thumb_h = max(36, 500*500/1000) = max(36, 250) = 250
   assert(approx(t.height, 250.0, 1.0))
-  // At top (pos_y = 0): top = 0
   assert(approx(t.top, 0.0, 1.0))
 }
 
 test "scrollbar_thumb_y at bottom" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
-  scroll.pos_y = -500.0 // scrolled to bottom
+  scroll.set_pos_y(-500.0)
   let t = scroll.scrollbar_thumb_y(500.0, 1000.0)
-  // frac = 500/500 = 1.0, top = 1.0 * (500 - 250) = 250
   assert(approx(t.top, 250.0, 1.0))
 }
 
-test "scrollbar_thumb_y no scroll" {
-  reset()
+test "scrollbar_thumb_y no scroll returns zero" {
+  scroll.reset()
   scroll.set_bounds(100.0, 100.0, 100.0, 100.0)
   let t = scroll.scrollbar_thumb_y(100.0, 100.0)
   assert(t.height == 0.0)
 }
 
-test "scrollbar_thumb_x returns correct size" {
-  reset()
+test "scrollbar_thumb_x size" {
+  scroll.reset()
   scroll.set_bounds(2000.0, 100.0, 500.0, 100.0)
   let t = scroll.scrollbar_thumb_x(500.0, 2000.0)
-  // thumb_w = max(36, 500*500/2000) = max(36, 125) = 125
   assert(approx(t.width, 125.0, 1.0))
 }
 
 test "scrollbar_set_y jumps to fraction" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
   scroll.scrollbar_set_y(0.5, 1000.0, 500.0)
-  // pos_y = -(0.5 * 500) = -250
   assert(approx(scroll.pos_y, -250.0, 1.0))
 }
 
 // ── track tap ──
 
 test "track_tap_y jumps to click position" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
   scroll.track_tap_y(250.0, 500.0, 1000.0)
-  // frac = 250/500 = 0.5, pos_y = -(0.5 * 500) = -250
   assert(approx(scroll.pos_y, -250.0, 1.0))
-  assert(scroll.state_y == 0) // IDLE
+  assert(scroll.state_y == 0)
 }
 
 // ── scrollbar fade ──
 
 test "scrollbar fades after idle delay" {
-  reset()
+  scroll.reset()
   scroll.set_bounds(100.0, 1000.0, 100.0, 500.0)
   scroll.wheel_y(-10.0)
   assert(scroll.bar_opacity_y == 1.0)
-  // Tick to idle
-  scroll.state_y = 0 // force IDLE
-  scroll.vel_y = 0.0
-  // Tick 1.3 seconds (past 1.2s delay)
+  scroll.set_state_y(0)
+  scroll.set_vel_y(0.0)
   for _ in 0..82 { let _ = scroll.tick(0.016) }
   assert(scroll.bar_opacity_y < 1.0)
-  // Tick until fully faded
   for _ in 0..50 { let _ = scroll.tick(0.016) }
   assert(scroll.bar_opacity_y < 0.02)
 }
@@ -250,10 +213,10 @@ test "powf computes float exponentiation" {
   assert(approx(scroll.powf(10.0, 0.0), 1.0, 0.001))
 }
 
-// ── full scroll cycle ──
+// ── full cycle ──
 
-test "wheel → coast → stop" {
-  reset()
+test "wheel coast stop cycle" {
+  scroll.reset()
   scroll.set_bounds(100.0, 2000.0, 100.0, 500.0)
   scroll.wheel_y(-30.0)
   var running = 1
@@ -266,4 +229,3 @@ test "wheel → coast → stop" {
   assert(scroll.pos_y < 0.0)
   assert(float.abs(scroll.vel_y) < 0.5)
 }
-

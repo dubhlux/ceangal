@@ -279,7 +279,24 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   // ── Touch drag scroll ──
 
   let _dragging = false, _lastPY = 0;
-  const _samples = [];
+  const _samples = []; // {t, y} — last 6 samples for velocity estimation
+
+  function estimateVelocity() {
+    // Weighted linear regression over recent samples (Flutter VelocityTracker inspired)
+    const n = _samples.length;
+    if (n < 2) return 0;
+    const now = _samples[n - 1].t;
+    let sw = 0, swt = 0, swy = 0, swtt = 0, swty = 0;
+    for (const s of _samples) {
+      const age = (now - s.t) / 1000;
+      if (age > 0.15) continue; // ignore samples older than 150ms
+      const w = 1 / (1 + age * 10); // recent samples weighted more
+      const t = -age;
+      sw += w; swt += w * t; swy += w * s.y; swtt += w * t * t; swty += w * t * s.y;
+    }
+    const det = sw * swtt - swt * swt;
+    return det > 1e-9 ? (sw * swty - swt * swy) / det : 0;
+  }
 
   canvas.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse" || e.button !== 0) return;
@@ -291,50 +308,81 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     if (!_dragging) return;
     const dy = e.clientY - _lastPY; _lastPY = e.clientY;
     _samples.push({ t: performance.now(), y: e.clientY });
-    if (_samples.length > 4) _samples.shift();
+    if (_samples.length > 8) _samples.shift();
     ex.scroll_drag?.(dy);
   });
   canvas.addEventListener("pointerup", (e) => {
     if (!_dragging) return; _dragging = false;
-    let vel = 0;
-    if (_samples.length >= 2) {
-      const a = _samples[0], b = _samples[_samples.length - 1];
-      const dt = (b.t - a.t) / 1000;
-      if (dt > 0.001) vel = (b.y - a.y) / dt;
-    }
-    ex.scroll_release?.(vel);
+    ex.scroll_release?.(estimateVelocity());
     animator.kick();
   });
   canvas.addEventListener("pointercancel", () => { _dragging = false; });
 
-  // ── Scrollbar mouse interaction ──
+  // ── Scrollbar: hover, drag, track tap ──
 
   let _barAxis = null; // "y" | "x" | null
   let _barStart = 0, _barThumbStart = 0;
+  const BAR_ZONE = 24; // hit zone width in CSS px
 
+  function barGeom() {
+    return {
+      yTop: ex.scrollbar_info_y ? Number(ex.scrollbar_info_y()) : 0,
+      yH: ex.scrollbar_height_y ? Number(ex.scrollbar_height_y()) : 0,
+      xLeft: ex.scrollbar_info_x ? Number(ex.scrollbar_info_x()) : 0,
+      xW: ex.scrollbar_width_x ? Number(ex.scrollbar_width_x()) : 0,
+    };
+  }
+
+  // Hover detection
+  canvas.addEventListener("mousemove", (e) => {
+    if (_barAxis) return; // dragging, skip hover
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const cw = container.clientWidth, ch = container.clientHeight;
+    const nearRight = mx > cw - BAR_ZONE;
+    const nearBottom = my > ch - BAR_ZONE;
+    ex.scrollbar_set_hover_y?.(nearRight ? 1.0 : 0.0);
+    ex.scrollbar_set_hover_x?.(nearBottom ? 1.0 : 0.0);
+    animator.kick();
+  });
+
+  canvas.addEventListener("mouseleave", () => {
+    if (!_barAxis) {
+      ex.scrollbar_set_hover_y?.(0.0);
+      ex.scrollbar_set_hover_x?.(0.0);
+      animator.kick();
+    }
+  });
+
+  // Scrollbar mousedown: thumb drag or track tap
   canvas.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left, my = e.clientY - rect.top;
     const cw = container.clientWidth, ch = container.clientHeight;
+    const g = barGeom();
 
-    // Vertical scrollbar (right 20px)
-    if (mx > cw - 20 && ex.scrollbar_info_y) {
-      const top = Number(ex.scrollbar_info_y());
-      const h = Number(ex.scrollbar_height_y());
-      if (h > 1 && my >= top && my <= top + h) {
-        _barAxis = "y"; _barStart = my; _barThumbStart = top;
-        e.preventDefault(); return;
+    // Vertical scrollbar zone
+    if (mx > cw - BAR_ZONE && g.yH > 1) {
+      if (my >= g.yTop && my <= g.yTop + g.yH) {
+        // Thumb drag
+        _barAxis = "y"; _barStart = my; _barThumbStart = g.yTop;
+      } else {
+        // Track tap — jump to click position
+        ex.scrollbar_track_tap_y?.(my);
+        animator.kick();
       }
+      e.preventDefault(); return;
     }
-    // Horizontal scrollbar (bottom 20px)
-    if (my > ch - 20 && ex.scrollbar_info_x) {
-      const left = Number(ex.scrollbar_info_x());
-      const w = Number(ex.scrollbar_width_x());
-      if (w > 1 && mx >= left && mx <= left + w) {
-        _barAxis = "x"; _barStart = mx; _barThumbStart = left;
-        e.preventDefault(); return;
+    // Horizontal scrollbar zone
+    if (my > ch - BAR_ZONE && g.xW > 1) {
+      if (mx >= g.xLeft && mx <= g.xLeft + g.xW) {
+        _barAxis = "x"; _barStart = mx; _barThumbStart = g.xLeft;
+      } else {
+        ex.scrollbar_track_tap_x?.(mx);
+        animator.kick();
       }
+      e.preventDefault(); return;
     }
   });
 
@@ -359,6 +407,8 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
   // ── Keyboard scroll ──
   canvas.tabIndex = 0;
+  canvas.setAttribute("role", "application");
+  canvas.setAttribute("aria-label", "Scrollable content");
   canvas.focus();
   const keyMap = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, PageUp: 4, PageDown: 5, Home: 6, End: 7 };
   canvas.addEventListener("keydown", (e) => {

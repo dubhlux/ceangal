@@ -25,6 +25,10 @@ struct Params {
   scroll_x: f32,
   scrollbar_opacity_y: f32,
   scrollbar_opacity_x: f32,
+  _pad0: u32,
+  scrollbar_hover_y: f32,
+  scrollbar_hover_x: f32,
+  _pad1: u32,
   _pad2: u32,
 }
 
@@ -228,12 +232,12 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   let px_x = uv.x * w;
   let px_y = uv.y * h;
 
-  // ── Vertical scrollbar ──
+  // ── Vertical scrollbar (Cupertino-style: thin → thick on hover) ──
   let content_h = f32(render_params.content_tiles_y * TILE_SIZE);
   if content_h > h && render_params.scrollbar_opacity_y > 0.01 {
-    let bar_w = 10.0;
-    let margin = 4.0;
-    let thumb_h = max(40.0, h * h / content_h);
+    let bar_w = mix(6.0, 10.0, render_params.scrollbar_hover_y);
+    let margin = mix(3.0, 4.0, render_params.scrollbar_hover_y);
+    let thumb_h = max(36.0, h * h / content_h);
     let scroll_range = content_h - h;
     let scroll_frac = clamp(-render_params.scroll_y / scroll_range, 0.0, 1.0);
     let thumb_y = scroll_frac * (h - thumb_h);
@@ -250,9 +254,9 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   // ── Horizontal scrollbar ──
   let content_w = f32(render_params.content_tiles_x * TILE_SIZE);
   if content_w > w && render_params.scrollbar_opacity_x > 0.01 {
-    let bar_h = 10.0;
-    let margin_x = 4.0;
-    let thumb_w = max(40.0, w * w / content_w);
+    let bar_h = mix(6.0, 10.0, render_params.scrollbar_hover_x);
+    let margin_x = mix(3.0, 4.0, render_params.scrollbar_hover_x);
+    let thumb_w = max(36.0, w * w / content_w);
     let scroll_range_x = content_w - w;
     let scroll_frac_x = clamp(-render_params.scroll_x / scroll_range_x, 0.0, 1.0);
     let thumb_x = scroll_frac_x * (w - thumb_w);

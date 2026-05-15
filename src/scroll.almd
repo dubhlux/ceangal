@@ -5,8 +5,7 @@
 
 import math
 
-// Float pow via exp/log (math.pow is Int-only)
-fn powf(base: Float, exp: Float) -> Float = math.exp(exp * math.log(base))
+fn powf(base: Float, exp: Float) -> Float = math.fpow(base, exp)
 
 let IDLE = 0
 let COASTING = 1
@@ -37,6 +36,24 @@ var min_x = 0.0
 var state_x = 0
 var bar_opacity_x = 0.0
 var bar_idle_x = 0.0
+var bar_hover_y = 0.0
+var bar_hover_x = 0.0
+
+// ── Reset (for testing) ──
+
+fn reset() -> Unit = {
+  pos_y = 0.0; vel_y = 0.0; min_y = 0.0; state_y = 0
+  pos_x = 0.0; vel_x = 0.0; min_x = 0.0; state_x = 0
+  bar_opacity_y = 0.0; bar_opacity_x = 0.0
+  bar_idle_y = 0.0; bar_idle_x = 0.0
+  bar_hover_y = 0.0; bar_hover_x = 0.0
+}
+
+// Set state directly (for testing)
+fn set_pos_y(v: Float) -> Unit = { pos_y = v }
+fn set_vel_y(v: Float) -> Unit = { vel_y = v }
+fn set_state_y(v: Int) -> Unit = { state_y = v }
+fn set_pos_x(v: Float) -> Unit = { pos_x = v }
 
 // ── Bounds ──
 
@@ -175,6 +192,37 @@ fn scrollbar_set_x(frac: Float, content_w: Float, viewport_w: Float) -> Unit = {
   state_x = IDLE
   bar_opacity_x = 1.0
   bar_idle_x = 0.0
+}
+
+// ── Hover ──
+
+fn set_hover_y(h: Float) -> Unit = { bar_hover_y = h }
+fn set_hover_x(h: Float) -> Unit = { bar_hover_x = h }
+
+// ── Track tap (page scroll to click position) ──
+
+fn track_tap_y(click_y: Float, viewport_h: Float, content_h: Float) -> Unit = {
+  if content_h <= viewport_h then () else {
+    let range = content_h - viewport_h
+    let frac = click_y / viewport_h
+    pos_y = 0.0 - float.max(0.0, float.min(range, frac * range))
+    vel_y = 0.0
+    state_y = IDLE
+    bar_opacity_y = 1.0
+    bar_idle_y = 0.0
+  }
+}
+
+fn track_tap_x(click_x: Float, viewport_w: Float, content_w: Float) -> Unit = {
+  if content_w <= viewport_w then () else {
+    let range = content_w - viewport_w
+    let frac = click_x / viewport_w
+    pos_x = 0.0 - float.max(0.0, float.min(range, frac * range))
+    vel_x = 0.0
+    state_x = IDLE
+    bar_opacity_x = 1.0
+    bar_idle_x = 0.0
+  }
 }
 
 // ── Tick (both axes) ──
