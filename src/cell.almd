@@ -1,0 +1,48 @@
+// Ceangal cell — reactive state primitive
+//
+// cell(value) creates a reactive cell.
+// .get() reads, .set() writes, .update() atomic update.
+// Any .set()/.update() marks the framework dirty → auto rebuild + diff.
+//
+// v1: dirty flag only (no dependency tracking).
+// v2 (future): fine-grained dependency tracking per cell.
+
+// ── Cell type ──
+
+type Cell[T] = { _val: T, _id: Int }
+
+// ── Framework state ──
+
+var _dirty = false
+var _next_id = 0
+
+// ── Constructor ──
+
+fn cell[T](initial: T) -> Cell[T] = {
+  let id = _next_id
+  _next_id = _next_id + 1
+  { _val: initial, _id: id }
+}
+
+// ── Read ──
+
+fn get[T](c: Cell[T]) -> T = c._val
+
+// ── Write (returns new cell — caller must reassign module-level var) ──
+
+fn set[T](c: Cell[T], value: T) -> Cell[T] = {
+  _dirty = true
+  { ...c, _val: value }
+}
+
+// ── Atomic update ──
+
+fn update[T](c: Cell[T], f: (T) -> T) -> Cell[T] = {
+  _dirty = true
+  { ...c, _val: f(c._val) }
+}
+
+// ── Framework integration ──
+
+fn is_dirty() -> Bool = _dirty
+fn clear_dirty() -> Unit = { _dirty = false }

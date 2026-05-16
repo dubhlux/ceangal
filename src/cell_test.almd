@@ -1,0 +1,54 @@
+// cell tests
+
+import self.cell as cell
+
+test "cell int" {
+  let count = cell.cell(0)
+  assert(count.get() == 0)
+  let count2 = count.set(5)
+  assert(count2.get() == 5)
+  assert(cell.is_dirty())
+}
+
+test "cell update" {
+  cell.clear_dirty()
+  let count = cell.cell(10)
+  let count2 = count.update((n) => n + 1)
+  assert(count2.get() == 11)
+  assert(cell.is_dirty())
+}
+
+test "cell string" {
+  let name = cell.cell("hello")
+  assert(name.get() == "hello")
+  let name2 = name.set("world")
+  assert(name2.get() == "world")
+}
+
+test "cell list" {
+  let items = cell.cell([1, 2, 3])
+  assert(list.len(items.get()) == 3)
+  let items2 = items.update((xs) => xs + [4])
+  assert(list.len(items2.get()) == 4)
+}
+
+test "cell preserves id" {
+  let a = cell.cell(0)
+  let b = a.set(99)
+  assert(a._id == b._id)
+}
+
+test "dirty flag resets" {
+  cell.clear_dirty()
+  assert(cell.is_dirty() == false)
+  let _ = cell.cell(0).set(1)
+  assert(cell.is_dirty() == true)
+  cell.clear_dirty()
+  assert(cell.is_dirty() == false)
+}
+
+test "ufcs chain" {
+  let count = cell.cell(0)
+  let result = count.set(10).update((n) => n * 2).get()
+  assert(result == 20)
+}
