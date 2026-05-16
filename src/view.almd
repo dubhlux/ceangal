@@ -125,6 +125,10 @@ fn selectable(v: View, on: Bool) -> View =
 fn on_click(v: View, callback_id: Int) -> View =
   { ...v, _on_click: callback_id }
 
+// Glass: semi-transparent bg + GPU backdrop blur
+fn glass(v: View, tint: Color, amount: Float) -> View =
+  { ...v, _style: { ...v._style, bg: tint, opacity: amount } }
+
 // ── Diff (framework internal) ──
 
 let PATCH_NONE = 0

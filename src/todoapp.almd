@@ -36,7 +36,7 @@ fn active_count() -> Int =
 // ── Style groups using theme tokens ──
 
 fn todo_card(view: v.View) -> v.View =
-  view |> t.card
+  view |> t.glass_card
 
 // ── Views ──
 

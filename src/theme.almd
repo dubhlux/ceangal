@@ -153,11 +153,17 @@ fn label(view: v.View) -> v.View =
 // WGSL renders them per-pixel in the fine pass.
 // Implementation requires extending Style + WGSL — staged for next iteration.
 
+// Glass: Apple-style frosted glass
+fn glass_card(view: v.View) -> v.View =
+  view |> v.glass(v.rgba(1.0, 1.0, 1.0, 0.12), 0.7)
+       |> v.rounded(rounded_xl) |> v.padding(sp_4)
+
+fn glass_dark(view: v.View) -> v.View =
+  view |> v.glass(v.rgba(0.0, 0.0, 0.0, 0.3), 0.6)
+       |> v.rounded(rounded_xl) |> v.padding(sp_4)
+
 // Glow: SDF distance 外側に color を滲ませる
 // fn glow(view: v.View, c: v.Color, radius: Float) -> v.View
-
-// Glass: background blur + tint overlay
-// fn glass(view: v.View, blur_radius: Float, tint: v.Color) -> v.View
 
 // Noise: subtle grain texture for depth
 // fn noise(view: v.View, amount: Float) -> v.View
