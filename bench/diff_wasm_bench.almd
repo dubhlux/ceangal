@@ -1,0 +1,75 @@
+// WASM diff benchmark — performance measurement via Node.js
+
+import self.view as v
+
+fn build_list(n: Int) -> v.View = {
+  var items: List[v.View] = []
+  for i in 0..n {
+    let phase = i - (i / 6) * 6
+    let c = if phase == 0 then v.rgba(0.9, 0.25, 0.25, 1.0)
+            else if phase == 1 then v.rgba(0.2, 0.75, 0.3, 1.0)
+            else if phase == 2 then v.rgba(0.25, 0.35, 0.9, 1.0)
+            else if phase == 3 then v.rgba(0.95, 0.7, 0.1, 1.0)
+            else if phase == 4 then v.rgba(0.7, 0.2, 0.8, 1.0)
+            else v.rgba(0.2, 0.7, 0.8, 1.0)
+    items = items + [v.text("Item " + int.to_string(i)) |> v.bg(c) |> v.padding(12.0)]
+  }
+  v.col(items) |> v.gap(4.0) |> v.padding(16.0)
+}
+
+fn build_one_changed(n: Int, idx: Int) -> v.View = {
+  var items: List[v.View] = []
+  for i in 0..n {
+    let phase = i - (i / 6) * 6
+    let c = if i == idx then v.rgba(1.0, 0.0, 0.0, 1.0)
+            else if phase == 0 then v.rgba(0.9, 0.25, 0.25, 1.0)
+            else if phase == 1 then v.rgba(0.2, 0.75, 0.3, 1.0)
+            else if phase == 2 then v.rgba(0.25, 0.35, 0.9, 1.0)
+            else if phase == 3 then v.rgba(0.95, 0.7, 0.1, 1.0)
+            else if phase == 4 then v.rgba(0.7, 0.2, 0.8, 1.0)
+            else v.rgba(0.2, 0.7, 0.8, 1.0)
+    items = items + [v.text("Item " + int.to_string(i)) |> v.bg(c) |> v.padding(12.0)]
+  }
+  v.col(items) |> v.gap(4.0) |> v.padding(16.0)
+}
+
+var cached_a: v.View = v.text("")
+var cached_b: v.View = v.text("")
+
+@export(wasm, "setup_unchanged")
+fn setup_unchanged(n: Int) -> Unit = {
+  cached_a = build_list(n)
+  cached_b = cached_a
+}
+
+@export(wasm, "setup_one_paint")
+fn setup_one_paint(n: Int) -> Unit = {
+  cached_a = build_list(n)
+  cached_b = build_one_changed(n, n / 2)
+}
+
+@export(wasm, "run_diff")
+fn run_diff() -> Int = {
+  let r = v.diff_tree(cached_a, cached_b)
+  r.relayouts + r.repaints + r.replaces
+}
+
+@export(wasm, "run_diff_n")
+fn run_diff_n(iterations: Int) -> Int = {
+  var total = 0
+  for _ in 0..iterations {
+    let r = v.diff_tree(cached_a, cached_b)
+    total = total + r.relayouts + r.repaints + r.replaces
+  }
+  total
+}
+
+@export(wasm, "run_build")
+fn run_build(n: Int, iterations: Int) -> Int = {
+  var dummy = 0
+  for _ in 0..iterations {
+    let tree = build_list(n)
+    dummy = dummy + list.len(tree.children)
+  }
+  dummy
+}

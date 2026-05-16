@@ -1,0 +1,130 @@
+// View diff correctness tests + benchmarks
+
+import self.view as v
+
+fn build_list(n: Int) -> v.View = {
+  var items: List[v.View] = []
+  for i in 0..n {
+    let phase = i - (i / 6) * 6
+    let c = if phase == 0 then v.rgba(0.9, 0.25, 0.25, 1.0)
+            else if phase == 1 then v.rgba(0.2, 0.75, 0.3, 1.0)
+            else if phase == 2 then v.rgba(0.25, 0.35, 0.9, 1.0)
+            else if phase == 3 then v.rgba(0.95, 0.7, 0.1, 1.0)
+            else if phase == 4 then v.rgba(0.7, 0.2, 0.8, 1.0)
+            else v.rgba(0.2, 0.7, 0.8, 1.0)
+    items = items + [v.text("Item " + int.to_string(i)) |> v.bg(c) |> v.padding(12.0)]
+  }
+  v.col(items) |> v.gap(4.0) |> v.padding(16.0)
+}
+
+fn build_one_changed(n: Int, idx: Int) -> v.View = {
+  var items: List[v.View] = []
+  for i in 0..n {
+    let phase = i - (i / 6) * 6
+    let c = if i == idx then v.rgba(1.0, 0.0, 0.0, 1.0)
+            else if phase == 0 then v.rgba(0.9, 0.25, 0.25, 1.0)
+            else if phase == 1 then v.rgba(0.2, 0.75, 0.3, 1.0)
+            else if phase == 2 then v.rgba(0.25, 0.35, 0.9, 1.0)
+            else if phase == 3 then v.rgba(0.95, 0.7, 0.1, 1.0)
+            else if phase == 4 then v.rgba(0.7, 0.2, 0.8, 1.0)
+            else v.rgba(0.2, 0.7, 0.8, 1.0)
+    items = items + [v.text("Item " + int.to_string(i)) |> v.bg(c) |> v.padding(12.0)]
+  }
+  v.col(items) |> v.gap(4.0) |> v.padding(16.0)
+}
+
+// ── Correctness ──
+
+test "diff unchanged" {
+  let tree = build_list(100)
+  let result = v.diff_tree(tree, tree)
+  assert(result.relayouts == 0)
+  assert(result.repaints == 0)
+  assert(result.replaces == 0)
+}
+
+test "diff one paint change" {
+  let old = build_list(100)
+  let changed = build_one_changed(100, 50)
+  let result = v.diff_tree(old, changed)
+  assert(result.repaints == 1)
+  assert(result.relayouts == 0)
+  assert(result.replaces == 0)
+}
+
+test "diff text change is relayout" {
+  let a = v.text("hello")
+  let b = v.text("world")
+  assert(v.diff_tree(a, b).relayouts == 1)
+}
+
+test "diff kind change is replace" {
+  let a = v.text("hello")
+  let b = v.box([])
+  assert(v.diff_tree(a, b).replaces == 1)
+}
+
+test "diff child added" {
+  let a = v.col([v.text("a")])
+  let b = v.col([v.text("a"), v.text("b")])
+  assert(v.diff_tree(a, b).replaces == 1)
+}
+
+test "diff child removed" {
+  let a = v.col([v.text("a"), v.text("b")])
+  let b = v.col([v.text("a")])
+  assert(v.diff_tree(a, b).replaces == 1)
+}
+
+test "pipe padding" {
+  let a = v.text("x") |> v.padding(8.0)
+  assert(a.style.pt == 8.0)
+  assert(a.style.pr == 8.0)
+}
+
+test "pipe bg" {
+  let red = v.rgba(1.0, 0.0, 0.0, 1.0)
+  let a = v.text("x") |> v.bg(red)
+  assert(a.style.bg.r == 1.0)
+  assert(a.style.bg.g == 0.0)
+}
+
+test "pipe grow" {
+  let a = v.text("x") |> v.grow(1.0)
+  assert(a.style.grow == 1.0)
+}
+
+test "pipe chain" {
+  let red = v.rgba(1.0, 0.0, 0.0, 1.0)
+  let a = v.text("hello")
+    |> v.font(24.0)
+    |> v.bg(red)
+    |> v.padding(12.0)
+    |> v.rounded(8.0)
+    |> v.grow(1.0)
+  assert(a.style.font_size == 24.0)
+  assert(a.style.bg.r == 1.0)
+  assert(a.style.pt == 12.0)
+  assert(a.style.rounded == 8.0)
+  assert(a.style.grow == 1.0)
+}
+
+// ── Bench (1000 nodes) ──
+
+test "bench: build 1000" {
+  let _ = build_list(1000)
+  assert(true)
+}
+
+test "bench: diff 1000 unchanged" {
+  let tree = build_list(1000)
+  let r = v.diff_tree(tree, tree)
+  assert(r.relayouts == 0)
+}
+
+test "bench: diff 1000 one changed" {
+  let old = build_list(1000)
+  let changed = build_one_changed(1000, 500)
+  let r = v.diff_tree(old, changed)
+  assert(r.repaints == 1)
+}
