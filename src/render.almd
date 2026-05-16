@@ -14,7 +14,7 @@ type RenderItem = {
   x: Float, y: Float, w: Float, h: Float,
   bg_r: Float, bg_g: Float, bg_b: Float, bg_a: Float,
   fg_r: Float, fg_g: Float, fg_b: Float, fg_a: Float,
-  rounded: Float, opacity: Float,
+  rounded: Float, opacity: Float, font_size: Float,
   content: String,
   kind: Int,
 }
@@ -58,7 +58,9 @@ fn view_to_node(view: v.View) -> lay.Node = {
 // ── Layout + zip ──
 
 fn render(view: v.View, viewport_w: Float, viewport_h: Float) -> List[RenderItem] = {
-  let root_node = view_to_node(view)
+  // Root View gets viewport dimensions for stretch layout
+  let sized_view = { ...view, style: { ...view.style, width: viewport_w, height: viewport_h } }
+  let root_node = view_to_node(sized_view)
   let rects = lay.layout(root_node, viewport_w, viewport_h)
   zip_view_rects(view, rects, 0).items
 }
@@ -75,7 +77,7 @@ fn zip_view_rects(view: v.View, rects: List[lay.LayoutRect], idx: Int) -> ZipRes
       x: r.x, y: r.y, w: r.w, h: r.h,
       bg_r: s.bg.r, bg_g: s.bg.g, bg_b: s.bg.b, bg_a: s.bg.a,
       fg_r: s.fg.r, fg_g: s.fg.g, fg_b: s.fg.b, fg_a: s.fg.a,
-      rounded: s.rounded, opacity: s.opacity,
+      rounded: s.rounded, opacity: s.opacity, font_size: s.font_size,
       content: view.content, kind: view.kind,
     }
     var items = [item]

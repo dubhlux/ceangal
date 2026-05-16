@@ -342,10 +342,7 @@ fn get_item_text(i: Int) -> Int = {
 }
 
 @export(wasm, "get_item_font_size")
-fn get_item_font_size(i: Int) -> Float = {
-  // Read from the original View tree's style
-  14.0  // default for now
-}
+fn get_item_font_size(i: Int) -> Float = cached_items[i].font_size
 
 // ── Todo actions (called from JS) ──
 

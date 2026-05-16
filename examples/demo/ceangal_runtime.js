@@ -285,9 +285,10 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
 
       if (!text) continue;
 
+      const fontSize = ex.get_item_font_size ? Number(ex.get_item_font_size(B(i))) : 14;
       const span = document.createElement("span");
       span.textContent = text;
-      span.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;display:flex;align-items:center;font:14px sans-serif;color:white;pointer-events:none;user-select:text;overflow:hidden;`;
+      span.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;display:flex;align-items:center;font:${fontSize}px sans-serif;color:white;pointer-events:auto;user-select:text;cursor:text;overflow:hidden;`;
       overlayEl.appendChild(span);
     }
   }
