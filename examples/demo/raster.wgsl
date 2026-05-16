@@ -196,7 +196,7 @@ fn fine(@builtin(global_invocation_id) gid: vec3<u32>,
   // ── Render items: View tree rects from storage buffer ──
   let ri_count = u32(render_items[2].w);  // item_count from first item's slot
   if ri_count > 0u {
-    // Gradient background (visible through glass)
+    // Simple dark gradient background (light effects applied in fragment shader)
   let grad_t = f32(py) / f32(params.height);
   let grad_x = f32(px) / f32(params.width);
   var bg = mix(
@@ -406,6 +406,19 @@ fn fs_fullscreen(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
   var r = f32(packed & 0xFFu) / 255.0;
   var g = f32((packed >> 8u) & 0xFFu) / 255.0;
   var b = f32((packed >> 16u) & 0xFFu) / 255.0;
+
+  // ── Mouse light (fragment shader — no compute re-run needed) ──
+  let mouse_pos = vec2<f32>(render_params.vlist_item_h, render_params.vlist_item_count);
+  if mouse_pos.x > 1.0 || mouse_pos.y > 1.0 {
+    let dist = length(vec2<f32>(f32(px_u), f32(py_u)) - mouse_pos);
+    let glow = exp(-dist * dist / (150.0 * 150.0 * 4.0));
+    r += glow * 0.18; g += glow * 0.12; b += glow * 0.28;
+  }
+
+  // ── Noise grain ──
+  let ns = vec2<f32>(f32(px_u) * 0.7 + 0.1, f32(py_u) * 1.3 + 0.7);
+  let grain = fract(sin(dot(ns, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+  r += (grain - 0.5) * 0.015; g += (grain - 0.5) * 0.015; b += (grain - 0.5) * 0.015;
 
   // ── Glass blur: items with opacity < 1.0 get backdrop blur ──
   let ri_count = u32(render_items[2].w);

@@ -104,9 +104,9 @@ fn draw_at_scroll() -> Unit = {
     }
     snaidhm.upload_regions(cached_scene, sc.region_count, rgn_bx, rgn_by, rgn_bw, rgn_bh, rgn_sx, rgn_sy, rgn_cw, rgn_ch, rgn_pa, rgn_boy, rgn_box)
 
-    // Write virtual list params to GPU (item_height in physical px, item_count)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, 0.0)
-    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, 0.0)
+    // Write mouse position for GPU light effect (repurpose vlist slots)
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, mouse_phys_x)
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, mouse_phys_y)
 
     snaidhm.draw_frame_2d(cached_scene,
       sc.ax_pos[rx] * s, sc.ax_pos[ry] * s,
@@ -349,6 +349,21 @@ fn get_item_selectable(i: Int) -> Int = cached_items[i].selectable
 // ── Todo actions (called from JS) ──
 
 var hover_idx = 0 - 1
+
+var mouse_phys_x = 0.0
+var mouse_phys_y = 0.0
+
+@export(wasm, "set_mouse_light")
+fn set_mouse_light(phys_x: Float, phys_y: Float) -> Unit = {
+  mouse_phys_x = phys_x
+  mouse_phys_y = phys_y
+  // Fragment-only: update params + render pass only (no compute re-run)
+  if scene_ready then {
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 56, phys_x)
+    gpu.write_f32_at(cached_scene.device, cached_scene.params_buf, 60, phys_y)
+    snaidhm.draw_render_only(cached_scene)
+  } else ()
+}
 
 @export(wasm, "set_hover")
 fn set_hover(mouse_x: Float, mouse_y: Float) -> Unit = {

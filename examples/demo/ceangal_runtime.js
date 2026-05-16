@@ -488,12 +488,38 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   window.addEventListener("mouseup", () => { _interaction = null; });
 
   // ── Hover ──
-  function onHover(e) {
-    if (!ex.set_hover) return;
+  // Mouse light with smooth lerp follow
+  let _mouseTarget = { x: 0, y: 0 };
+  let _lightPos = { x: 0, y: 0 };
+  let _lightRaf = null;
+
+  container.addEventListener("mousemove", (e) => {
     const rect = canvas.getBoundingClientRect();
-    ex.set_hover(e.clientX - rect.left, e.clientY - rect.top);
+    _mouseTarget.x = e.clientX - rect.left;
+    _mouseTarget.y = e.clientY - rect.top;
+    if (ex.set_hover) ex.set_hover(_mouseTarget.x, _mouseTarget.y);
+    if (!_lightRaf) startLightLoop();
+  });
+
+  function startLightLoop() {
+    const dpr = window.devicePixelRatio || 1;
+    const loop = () => {
+      // Lerp: light follows mouse with easing
+      _lightPos.x += (_mouseTarget.x - _lightPos.x) * 0.08;
+      _lightPos.y += (_mouseTarget.y - _lightPos.y) * 0.08;
+      if (ex.set_mouse_light) ex.set_mouse_light(_lightPos.x * dpr, _lightPos.y * dpr);
+
+      // Stop loop if close enough
+      const dx = _mouseTarget.x - _lightPos.x;
+      const dy = _mouseTarget.y - _lightPos.y;
+      if (dx * dx + dy * dy > 0.5) {
+        _lightRaf = requestAnimationFrame(loop);
+      } else {
+        _lightRaf = null;
+      }
+    };
+    _lightRaf = requestAnimationFrame(loop);
   }
-  container.addEventListener("mousemove", onHover);
 
   // ── Todo actions ──
   function handleTodoClick(e) {
