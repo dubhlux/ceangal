@@ -231,15 +231,7 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
   // Background texture
   const bgSampObj = _device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
   let bgTex;
-  try {
-    const resp = await fetch("./bg.jpg");
-    if (resp.ok) {
-      const bmp = await createImageBitmap(await resp.blob());
-      bgTex = _device.createTexture({ size: [bmp.width, bmp.height], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
-      _device.queue.copyExternalImageToTexture({ source: bmp }, { texture: bgTex }, [bmp.width, bmp.height]);
-    }
-  } catch (_) {}
-  if (!bgTex) {
+  {
     // Procedural wallpaper fallback
     const W = 512, H = 512;
     const c = document.createElement("canvas"); c.width = W; c.height = H;
