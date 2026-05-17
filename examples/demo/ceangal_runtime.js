@@ -389,33 +389,27 @@ export async function init(wasmUrl, canvas, overlayEl, textareaEl) {
     if (!ex.handle_click) return;
     const rect = canvas.getBoundingClientRect();
     const result = N(ex.handle_click(e.clientX - rect.left, e.clientY - rect.top));
-    if (result >= 0) {
-      ex.todo_toggle(B(result));
-      scheduleFlush();
-    } else if (result === -2) {
+    if (result === -2) {
       ex.todo_add();
-      scheduleFlush();
+      scheduleOverlay();
+    } else if (result >= 0) {
+      ex.todo_toggle(B(result));
+      scheduleOverlay();
     }
   }
   canvas.addEventListener("click", handleClick);
+  overlayEl.addEventListener("click", handleClick);
 
-  let _flushTimer = 0;
-  function scheduleFlush() {
-    clearTimeout(_flushTimer);
-    _flushTimer = setTimeout(() => {
-      const t0 = performance.now();
-      ex.flush?.();
-      const t1 = performance.now();
-      buildOverlay();
-      const t2 = performance.now();
-      console.log(`[perf] flush=${(t1-t0).toFixed(1)}ms overlay=${(t2-t1).toFixed(1)}ms items=${ex.get_item_count ? N(ex.get_item_count()) : "?"}`);
-    }, 16);
+  let _overlayTimer = 0;
+  function scheduleOverlay() {
+    clearTimeout(_overlayTimer);
+    _overlayTimer = setTimeout(() => buildOverlay(), 16);
   }
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && ex.todo_add) {
       ex.todo_add();
-      scheduleFlush();
+      scheduleOverlay();
     }
   });
 

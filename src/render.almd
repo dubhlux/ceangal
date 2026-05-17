@@ -29,7 +29,7 @@ fn child_to_node(child: v.View, viewport_h: Float, scroll_y: Float) -> lay.Node 
 fn children_to_nodes(children: List[v.View], viewport_h: Float, scroll_y: Float) -> List[lay.Node] = {
   var nodes: List[lay.Node] = []
   for child in children {
-    nodes = nodes + [child_to_node(child, viewport_h, scroll_y)]
+    list.push(nodes, child_to_node(child, viewport_h, scroll_y))
   }
   nodes
 }

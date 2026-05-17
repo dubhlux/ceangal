@@ -258,28 +258,23 @@ fn get_list_frame_h() -> Float = render.list_frame_height
 
 @export(wasm, "handle_click")
 fn handle_click(click_x: Float, click_y: Float) -> Int = {
-  // click is in viewport coords; list items need scroll offset for hit test
-  let scroll_y = sc.get_pos(root_region, sc.AXIS_Y)
-  var result = 0 - 1
-  let todos_list = td.todos.get()
-  var todo_idx = 0
-  for i in 0..list.len(cached_items) {
-    let item = cached_items[i]
-    let item_y = if item.scrollable == 1 then item.y + scroll_y else item.y
-    if click_x >= item.x and click_x < item.x + item.w and
-       click_y >= item_y and click_y < item_y + item.h then {
-      if item.kind == 2 and item.bg_a > 0.01 and todo_idx < list.len(todos_list) then {
-        result = todos_list[todo_idx].id
-      } else ()
-      if item.kind == 0 and item.content == "+ Add (Enter)" then {
-        result = 0 - 2
-      } else ()
-    } else ()
-    if item.kind == 2 and item.bg_a > 0.01 then {
-      todo_idx = todo_idx + 1
-    } else ()
+  let list_y = render.list_frame_y
+  let list_h = render.list_frame_height
+
+  // Button first (below list)
+  if click_y > list_y + list_h then 0 - 2
+  // List area
+  else if click_y >= list_y then {
+    let scroll_y = sc.get_pos(root_region, sc.AXIS_Y)
+    let ih = 56.0
+    let todos_list = td.todos.get()
+    let total = list.len(todos_list)
+    let content_y = click_y - scroll_y - list_y
+    let idx = float.to_int(float.floor(content_y / ih))
+    if idx >= 0 and idx < total then todos_list[idx].id
+    else 0 - 1
   }
-  result
+  else 0 - 1
 }
 
 // ══════════════════════════════════════════════════════════════
